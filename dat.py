@@ -1,3 +1,9 @@
+"""Usage:
+    dat-test <arg>
+
+Hi!
+"""
+
 # Definitions:
 #   push: local file is changed/new
 #   pull: remote file is changed/new
@@ -11,12 +17,18 @@ import sys
 import boto3
 import shutil
 import hashlib
-import manifest
+#import manifest
 import platform
 import subprocess
 from glob import glob
 from boto3.session import botocore
 from botocore.exceptions import ClientError
+from docopt import docopt
+
+def test():
+    arg = docopt(__doc__)
+    print('hi')
+    print(arg['<arg>'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'

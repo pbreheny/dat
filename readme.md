@@ -6,10 +6,8 @@ The basic logic behind `dat` is that it tracks the [md5](https://en.wikipedia.or
 
 ## Installation
 
-Check out the repo and include it in your path. You will also need some dependencies, so run:
-
 ```bash
-pip install boto3 docopt
+pip install git+https://github.com/pbreheny/dat
 ```
 
 ## Initial setup

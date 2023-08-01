@@ -1,7 +1,25 @@
-"""Usage:
-    dat-test <arg>
+#!/usr/bin/env python3
+"""Push/pull system for cloud synchronization
 
-Hi!
+Usage:
+    dat init [--profile=<profile>] [<bucket>]
+    dat checkout <file>
+    dat clone <folder>
+    dat clone <bucket> <folder>
+    dat [-p] delete
+    dat [-d] pull
+    dat [-d] push
+    dat stash
+    dat stash pop
+    dat stash pop --hard
+    dat [-r] status
+
+Arguments:
+    bucket     Name of bucket (ex: my-bucket)
+    folder     Name of local folder
+    -d         Dry run?
+    -r         Check status against remote?
+    --hard     Overwrites existing files when popping stash
 """
 
 # Definitions:
@@ -17,7 +35,6 @@ import sys
 import boto3
 import shutil
 import hashlib
-#import manifest
 import platform
 import subprocess
 from glob import glob
@@ -25,10 +42,20 @@ from boto3.session import botocore
 from botocore.exceptions import ClientError
 from docopt import docopt
 
-def test():
+def dat():
     arg = docopt(__doc__)
-    print('hi')
-    print(arg['<arg>'])
+    if arg['init']: dat_init(arg['<bucket>'], arg['<profile>'])
+    elif arg['checkout']: dat_checkout(arg['<file>'])
+    elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'])
+    elif arg['delete']: dat_delete(arg['-p'])
+    elif arg['push']: dat_push(arg['-d'])
+    elif arg['pull']: dat_pull(arg['-d'])
+    elif arg['stash']:
+        if arg['pop']:
+            dat_pop(arg['--hard'])
+        else:
+            dat_stash()
+    elif arg['status']: dat_status(arg['-r'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
@@ -357,6 +384,27 @@ def dat_delete(personal=False):
     if os.path.isfile('.dat-local'): os.remove('.dat-local')
     os.system('echo "NEVER PUSHED" >> .dat-config')
 
+def dat_init(id, profile):
+
+    # Don't overwrite existing config
+    if os.path.isfile('.dat-config'):
+        exit(red('Error: .dat-config already exists'))
+
+    # Create id
+    if id is None:
+        id = os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()
+
+    # Write config file
+    f = open('.dat-config', 'w')
+    f.write('aws:' + id + '\n')
+    if profile is not None:
+        f.write(f'profile: {profile}\n')
+        print(green(f'Configured for profile={profile} aws bucket: ') + id)
+    else:
+        print(green('Configured for aws bucket: ') + id)
+    f.write('NEVER PUSHED\n')
+    f.close()
+
 def dat_pull(dry=False):
 
     # Read in config file
@@ -508,26 +556,6 @@ def dat_stash():
         write_inventory(local, '.dat-local')
 
 def dat_status(remote):
-
-    # Run recursively if at project head
-    if not os.path.isfile('.dat-config'):
-        current_dir = os.getcwd()
-        md = manifest.manifest_dats(current_dir).split(';')
-        if len(md[0]) == 0:
-            print('Not a dat repository!')
-            sys.exit(1)
-        else:
-            for dat in md:
-                dat_dir = dat.split('@')[0]
-                if os.path.isdir(dat_dir):
-                    print('\nSubdirectory: ' + blue(dat_dir))
-                    os.chdir(dat_dir)
-                    dat_status(True)
-                    os.chdir(current_dir)
-                else:
-                    print('dat directory ' + red(dat_dir) + ' does not exist')
-            print()
-        exit()
 
     # Read in config file
     [loc, id, pushed] = read_config(True)

@@ -302,8 +302,11 @@ def dat_clone(bucket, folder, profile=None, subdir=None):
 
     # Process bucket
     if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
-    if ':' not in bucket: exit('Error: Central location must be of form aws:id or hpc:id')
-    [loc, id] = bucket.split(':')
+    if ':' not in bucket:
+        loc = 'aws'
+        id = bucket
+    else:
+        [loc, id] = bucket.split(':')
 
     # Create folder
     if os.path.isdir(folder): sys.exit(red(f'Error: Directory "{folder}" already exists'))

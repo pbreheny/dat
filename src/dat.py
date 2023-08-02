@@ -115,7 +115,7 @@ def read_config():
 def write_config(config, filename='.dat/config'):
     config_file = open(filename, 'w')
     for k in sorted(config.keys()):
-        config_file.write(f"{k}: {config[k]}")
+        config_file.write(f"{k}: {config[k]}\n")
     config_file.close()
 
 def get_master(config, local=None):

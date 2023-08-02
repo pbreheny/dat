@@ -12,9 +12,7 @@ The basic logic behind `dat` is that it tracks the [md5](https://en.wikipedia.or
 pip install git+https://github.com/pbreheny/dat
 ```
 
-## Initial setup
-
-NEED TO MOVE SOME HARD-CODED STUFF TO DAT SETUP OR SOMETHING
+`dat` also requires that the [AWS command-line interface](https://aws.amazon.com/cli/) is installed on your system.
 
 ## Basic usage
 

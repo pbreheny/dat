@@ -119,7 +119,7 @@ def write_config(config):
     config_file.close()
 
 def get_master(config, local=None):
-    if config['loc'] == 'aws':
+    if 'aws' in config.keys():
         if 'profile' in config.keys():
             boto3.setup_default_session(profile_name=config['profile'])
         s3 = boto3.client('s3')
@@ -299,7 +299,7 @@ def dat_checkout(filename):
     local[filename] = current[filename]
     write_inventory(local, '.dat/local')
 
-def dat_clone(bucket, folder, profile=None):
+def dat_clone(bucket, folder, profile=None, subdir=None):
 
     # Process bucket
     if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
@@ -332,8 +332,11 @@ def dat_clone(bucket, folder, profile=None):
         exit()
 
     # Write config
-    f = open(folder + '/.dat/config', 'w')
-    f.write(loc + ':' + id + '\n')
+    config = {'pushed': 'True'}
+    config[loc] = id
+    if profile is not None: config['profile'] = profile
+    if subdir is not None: config['subdir'] = subdir
+    write_config(config)
 
     # Convert if old-style dat format
     if os.path.isfile(folder + '/.dat/master'):

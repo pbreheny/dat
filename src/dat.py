@@ -388,7 +388,7 @@ def dat_init(id, profile, subdir):
 
     # Create id
     if id is None:
-        id = os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()
+        id = os.environ['USERNAME'] + '.' + os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()
 
     # Write config file
     config = open('.dat/config', 'w')

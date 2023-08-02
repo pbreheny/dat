@@ -4,8 +4,8 @@
 Usage:
     dat init [--profile=<profile>] [--subdir=<subdir>] [<bucket>]
     dat checkout <file>
-    dat clone <folder>
-    dat clone <bucket> <folder>
+    dat clone [--profile=<profile>] [--subdir=<subdir>] <folder>
+    dat clone [--profile=<profile>] [--subdir=<subdir>] <bucket> <folder>
     dat [-p] delete
     dat [-d] pull
     dat [-d] push
@@ -50,7 +50,7 @@ def dat():
     arg = docopt(__doc__)
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'], arg['--subdir'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
-    elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'])
+    elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'], arg['--subdir'])
     elif arg['delete']: dat_delete(arg['-p'])
     elif arg['push']: dat_push(arg['-d'])
     elif arg['pull']: dat_pull(arg['-d'])
@@ -73,13 +73,13 @@ def md5(fname):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def take_inventory():
-    base = '_site' if os.path.isdir('_site') else '.'
+def take_inventory(config):
+    base = config.get('subdir', '.')
     inv = []
     for root, dirs, files in os.walk(base):
         for file in files:
             inv.append(re.sub('^\\./', '', root + '/' + file))
-    inv = [x for x in inv if x != '.dat-config' and x != '.gitignore' and x != '.dat-stash' and x != '.dat-local' and x != '.dat-master']
+    inv = [x for x in inv if not x.startswith('.dat')]
     out = dict()
     for f in inv:
         out[f] = md5(f)
@@ -92,7 +92,7 @@ def write_inventory(x, fname):
     f.close()
 
 def read_inventory(fname):
-    if os.path.isfile('.dat-local'):
+    if os.path.isfile('.dat/local'):
         f = open(fname)
         out = dict()
         for line in f:
@@ -104,34 +104,40 @@ def read_inventory(fname):
 
 def read_config():
     if not os.path.isfile('.dat/config'):
-        sys.exit(red('Not a dat repository; no .dat-config file'))
+        sys.exit(red('Not a dat repository; no .dat/config file'))
 
     config = {}
     for line in open('.dat/config'):
         y = line.split(': ')
-        config[y[0]] = y[1]
+        config[y[0]] = y[1].strip()
+    return config
 
-def get_master(loc, id, local=None):
-    if loc == 'aws':
-        if 'profile: personal' in open('.dat-config').read():
-            personal = True
-            boto3.setup_default_session(profile_name='personal')
-        else:
-            personal = False
+def write_config(config):
+    config_file = open('.dat/config', 'w')
+    for k in sorted(config.keys()):
+        config_file.write(f"{k}: {config[k]}")
+    config_file.close()
+
+def get_master(config, local=None):
+    if config['loc'] == 'aws':
+        if 'profile' in config.keys():
+            boto3.setup_default_session(profile_name=config['profile'])
         s3 = boto3.client('s3')
+
         try:
             allBuckets = [bucket['Name'] for bucket in s3.list_buckets()['Buckets']]
         except ClientError:
             quit(red('Token has expired; run "aws login"'))
+
         bucket = id.split('/')[0]
         if bucket in allBuckets:
-            base = '_site' if os.path.isdir('_site') else '.'
-            cmd = 'aws s3 cp s3://' + id + '/.dat-master ' + base
-            if personal: cmd = cmd + ' --profile personal'
+            base = config.get('subdir', '.')
+            cmd = f'aws s3 cp s3://{id}/.dat/master {base}'
+            if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
             a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            if os.path.isfile(base + '/.dat-master'):
-                master = read_inventory(base + '/.dat-master')
-                os.remove(base + '/.dat-master')
+            if os.path.isfile(base + '/.dat/master'):
+                master = read_inventory(base + '/.dat/master')
+                os.remove(base + '/.dat/master')
             else:
                 master = local
         else:
@@ -139,11 +145,10 @@ def get_master(loc, id, local=None):
                 s3.create_bucket(Bucket=bucket)
                 master = local
             else:
-                print(red('Remote bucket not created yet'))
-                sys.exit(1)
+                sys.exit(red('Remote bucket not created yet'))
     else:
-        sys.exit('Only aws pulls are supported')
-    return(master)
+        sys.exit(red('Only aws pulls are supported in this version'))
+    return master
 
 def needs_push(current, local):
     push = set()
@@ -156,7 +161,7 @@ def needs_push(current, local):
     else:
         for f in current.keys():
             push.add(f)
-    return(push)
+    return push
 
 def needs_pull(master, local):
     pull = set()
@@ -165,21 +170,21 @@ def needs_pull(master, local):
             pull.add(f)
         elif local[f] != master[f]:
             pull.add(f)
-    return(pull)
+    return pull
 
 def needs_purge(current, local):
     purge = set()
     for f in local.keys():
         if f not in current.keys():
             purge.add(f)
-    return(purge)
+    return purge
 
 def needs_kill(master, local):
     kill = set()
     for f in local.keys():
         if f not in master.keys():
             kill.add(f)
-    return(kill)
+    return kill
 
 def resolve_push_conflicts(current, local, master, push):
     conflict = set()
@@ -208,7 +213,7 @@ def resolve_push_conflicts(current, local, master, push):
             else:
                 master[f] = current[f] # Brand new file
                 local[f] = current[f]
-    return([conflict, resolved])
+    return [conflict, resolved]
 
 def resolve_purge_conflicts(master, local, purge):
     conflict = set()
@@ -223,7 +228,7 @@ def resolve_purge_conflicts(master, local, purge):
         else:
             local.pop(f) # Handle quietly; just fix local
             resolved.add(f)
-    return([conflict, resolved])
+    return [conflict, resolved]
 
 def resolve_pull_conflicts(current, local, master, pull):
     conflict = set()
@@ -249,7 +254,7 @@ def resolve_pull_conflicts(current, local, master, pull):
                     conflict.add(f)
             else:
                 local[f] = master[f]  # Good
-    return([conflict, resolved])
+    return [conflict, resolved]
 
 def resolve_kill_conflicts(current, local, kill):
     conflict = set()
@@ -263,12 +268,12 @@ def resolve_kill_conflicts(current, local, kill):
         else:
             local.pop(f)
             resolved.add(f)
-    return([conflict, resolved])
+    return [conflict, resolved]
 
 def dat_checkout(filename):
 
     # Read in config file
-    [loc, id] = read_config()
+    config = read_config()
 
     # Parse filename
     fd = os.path.dirname(filename)
@@ -277,13 +282,10 @@ def dat_checkout(filename):
     dest = fd + '/' + ff
 
     # Pull file
-    cmd = 'aws s3 cp s3://' + id + '/' + filename + ' ' + dest
-    if 'profile: personal' in open('.dat-config').read():
-        cmd = cmd + ' --profile personal'
-        personal = True
-        boto3.setup_default_session(profile_name='personal')
-    else:
-        personal = False
+    cmd = f"aws s3 cp s3://{config['id']}/{filename} {dest}"
+    if 'profile' in config.keys():
+        cmd = cmd + f" --profile {config['profile']}"
+        boto3.setup_default_session(profile_name=config['profile'])
     s3 = boto3.client('s3')
     try:
         allBuckets = [bucket['Name'] for bucket in s3.list_buckets()['Buckets']]
@@ -293,11 +295,11 @@ def dat_checkout(filename):
 
     # Update manifest
     current = take_inventory()
-    local = read_inventory('.dat-local')
+    local = read_inventory('.dat/local')
     local[filename] = current[filename]
-    write_inventory(local, '.dat-local')
+    write_inventory(local, '.dat/local')
 
-def dat_clone(bucket, folder):
+def dat_clone(bucket, folder, profile=None):
 
     # Process bucket
     if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
@@ -311,10 +313,8 @@ def dat_clone(bucket, folder):
     # Clone
     if loc == 'aws':
         cmd = 'aws s3 sync s3://' + id + '/ ' + folder + '/'
-        if os.path.isfile('.dat-config'):
-            if 'profile: personal' in open('.dat-config').read(): cmd = cmd + ' --profile personal'
-        else:
-            cmd = cmd + ' --profile personal' # Need a better solution to this
+        if profile is not None:
+            cmd = cmd + f' --profile {profile}'
         err = os.system(cmd)
     elif loc == 'hpc':
         if 'argon' in platform.node():
@@ -332,51 +332,48 @@ def dat_clone(bucket, folder):
         exit()
 
     # Write config
-    f = open(folder + '/.dat-config', 'w')
+    f = open(folder + '/.dat/config', 'w')
     f.write(loc + ':' + id + '\n')
 
     # Convert if old-style dat format
-    if os.path.isfile(folder + '/.dat-master'):
-        os.rename(folder + '/.dat-master', folder + '/.dat-local')
+    if os.path.isfile(folder + '/.dat/master'):
+        os.rename(folder + '/.dat/master', folder + '/.dat/local')
     else:
-        print('Warning: No .dat-master file -- upgrade dat version to md5')
+        print('Warning: No .dat/master file -- upgrade dat version to md5')
 
 def dat_delete():
 
     # Read in config file
-    [loc, id, pushed] = read_config(True)
-    sub = id.startswith('pbreheny.public.web.host/')
+    config = read_config()
 
     # Delete remote files (+ bucket)
-    if id.startswith('pbreheny.public.web.host/'):
-        cmd = 'aws s3 rm s3://' + id + ' --recursive'
+    cmd = f"aws s3 rm s3://{config['id']} --recursive"
+    if 'profile' in config.keys():
+        cmd = cmd + f" --profile {config['profile']}"
+    if 'subdir' in config.keys():
         os.system(cmd)
     else:
-        if 'profile: personal' in open('.dat-config').read(): personal=True
-        if personal:
-            session = boto3.Session(profile_name='personal')
+        if 'profile' in config.keys():
+            session = boto3.Session(profile_name=config['profile'])
             s3 = session.client('s3')
         else:
             s3 = boto3.client('s3')
+
         try:
             all_buckets = [bucket['Name'] for bucket in s3.list_buckets()['Buckets']]
         except ClientError:
             quit(red('Token has expired; run "aws login"'))
-        if id in all_buckets:
-            # Delete all objects from bucket
-            cmd = 'aws s3 rm s3://' + id + ' --recursive'
-            if personal:
-                cmd = cmd + ' --profile personal'
-            os.system(cmd)
 
-            # Delete bucket
+        if id in all_buckets:
+            os.system(cmd)
             s3.delete_bucket(Bucket=id)
         else:
             quit(red('Bucket ' + id + ' does not exist'))
 
     # Local
-    if os.path.isfile('.dat-local'): os.remove('.dat-local')
-    os.system('echo "NEVER PUSHED" >> .dat-config')
+    if os.path.isfile('.dat/local'): os.remove('.dat/local')
+    config['pushed'] = 'False'
+    write_config(config)
 
 def dat_init(id, profile, subdir):
 
@@ -405,12 +402,12 @@ def dat_init(id, profile, subdir):
 def dat_pull(dry=False):
 
     # Read in config file
-    [loc, id] = read_config()
+    config = read_config()
 
     # Get master/current/local
     current = take_inventory()
-    local = read_inventory('.dat-local')
-    master = get_master(loc, id)
+    local = read_inventory('.dat/local')
+    master = get_master(config)
 
     # Create pull, purge lists
     pull = needs_pull(master, local)
@@ -426,34 +423,34 @@ def dat_pull(dry=False):
     # Sync
     resolved = sorted(kill_resolved | pull_resolved)
     if len(pull | kill):
-        opt = ' --delete --exclude "*"'
+        opt = '--delete --exclude "*"'
         for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        base = '_site' if os.path.isdir('_site') else '.'
-        cmd = 'aws s3 sync s3://' + id + ' ' + base + opt
-        if 'profile: personal' in open('.dat-config').read():
-            cmd = cmd + ' --profile personal'
+        base = config.get('subdir', '.')
+        cmd = f"aws s3 sync s3://{config['id']} {base} {opt}"
+        if 'profile' in config.keys():
+            cmd = cmd + f" --profile {config['profile']}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))
         else:
             os.system(cmd)
-            write_inventory(local, '.dat-local')
+            write_inventory(local, '.dat/local')
     elif len(conflict) == 0:
         if dry:
             print('--no command issued--')
         else:
-            write_inventory(local, '.dat-local')
+            write_inventory(local, '.dat/local')
         exit('Everything up-to-date')
 
 def dat_push(dry=False):
 
     # Read in config file
-    [loc, id, pushed] = read_config(True)
+    config = read_config(True)
 
     # Get current/local
     current = take_inventory()
-    local = read_inventory('.dat-local')
+    local = read_inventory('.dat/local')
 
     # Create push, purg lists
     push = needs_push(current, local)
@@ -463,7 +460,7 @@ def dat_push(dry=False):
     if len(push | purg) == 0:
         exit('Everything up-to-date')
     else:
-        master = get_master(loc, id, local)
+        master = get_master(config, local)
 
     # Check for conflicts
     [push_conflict, push_resolved] = resolve_push_conflicts(current, local, master, push)
@@ -475,34 +472,30 @@ def dat_push(dry=False):
     # Sync
     resolved = sorted(push_resolved | purg_resolved)
     if len(push | purg):
-        opt = ' --delete --exclude "*" --include .dat-master'
+        opt = '--delete --exclude "*" --include .dat/master'
         for f in sorted((push | purg) - push_conflict - purg_conflict - push_resolved - purg_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        if 'profile: personal' in open('.dat-config').read():
-            opt = opt + ' --profile personal'
-        base = '_site' if os.path.isdir('_site') else '.'
-        cmd = 'aws s3 sync --no-follow-symlinks ' + base + ' s3://' + id + opt
+        if 'profile' in config.keys():
+            opt = opt + f" --profile {config['profile']}"
+        base = config.get('subdir', '.')
+        cmd = f"aws s3 sync --no-follow-symlinks {base} s3://{config['id']} {opt}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))
         else:
-            write_inventory(master, base + '/.dat-master')
+            write_inventory(master, base + '/.dat/master')
             os.system(cmd)
-            write_inventory(local, '.dat-local')
-            os.remove(base + '/.dat-master')
+            write_inventory(local, '.dat/local')
+            os.remove(base + '/.dat/master')
     elif len(conflict) == 0:
-        if not dry: write_inventory(local, '.dat-local')
+        if not dry: write_inventory(local, '.dat/local')
         exit('Everything up-to-date')
 
     # Remove never pushed tag, if present
     if not dry:
-        config = open('.dat-config').read().split('\n')
-        if 'NEVER PUSHED' in config:
-            config.remove('NEVER PUSHED')
-            f = open('.dat-config', 'w')
-            for line in config:
-                if line != '': f.write(line + '\n')
-            f.close()
+        config['pushed'] = 'True'
+        write_config(config)
+
 def dat_pop(hard=False):
     if not os.path.isdir('.dat/stash'): exit('Error: No stash detected!')
     for f in glob(r'.dat/stash/*'):
@@ -520,15 +513,15 @@ def dat_pop(hard=False):
 def dat_stash():
 
     # Read in config file
-    [loc, id] = read_config()
+    config = read_config()
 
     # Check for existing stash
     if os.path.isdir('.dat/stash'): exit('Error: Unpopped stash detected!')
 
     # Get master/current/local
     current = take_inventory()
-    local = read_inventory('.dat-local')
-    master = get_master(loc, id)
+    local = read_inventory('.dat/local')
+    master = get_master(config)
     if len(local) == 0: local = current
 
     # Create conflict list
@@ -538,30 +531,23 @@ def dat_stash():
     [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
     conflict = pull_conflict.union(kill_conflict)
 
-    #push = needs_push(current, local)
-    #purge = needs_purge(current, local)
-    #[push_conflict, push_resolved] = resolve_push_conflicts(master, local, push)
-    #[purge_conflict, purge_resolved] = resolve_purge_conflicts(master, local, purge)
-    #conflict = pull_conflict.union(kill_conflict)
-
     # Stash conflicted files
-    if not os.path.isdir('.dat'): os.mkdir('.dat')
     os.mkdir('.dat/stash')
     for f in conflict:
         shutil.move(f, '.dat/stash/')
         local.pop(f)
-        write_inventory(local, '.dat-local')
+        write_inventory(local, '.dat/local')
 
 def dat_status(remote):
 
     # Read in config file
-    [loc, id, pushed] = read_config(True)
+    config = read_config(True)
 
     # Get current/local
     current = take_inventory()
-    local = read_inventory('.dat-local')
+    local = read_inventory('.dat/local')
 
-    if not pushed:
+    if config['pushed'] == 'False':
         print(red('dat initialized, but never pushed'))
 
     # Create push, purg lists
@@ -569,7 +555,7 @@ def dat_status(remote):
     purg = needs_purge(current, local)
 
     if remote:
-        master = get_master(loc, id)
+        master = get_master(config)
         olocal = local.copy()
         omaster = master.copy()
 
@@ -580,17 +566,17 @@ def dat_status(remote):
         # Check for conflicts
         [push_conflict, push_resolved] = resolve_push_conflicts(current, local, master, push)
         master = omaster.copy()
-        write_inventory(local, '.dat-local')
+        write_inventory(local, '.dat/local')
         local = olocal.copy()
         [purg_conflict, purg_resolved] = resolve_purge_conflicts(master, local, purg)
         master = omaster.copy()
-        write_inventory(local, '.dat-local')
+        write_inventory(local, '.dat/local')
         local = olocal.copy()
         [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
-        write_inventory(local, '.dat-local')
+        write_inventory(local, '.dat/local')
         local = olocal.copy()
         [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
-        write_inventory(local, '.dat-local')
+        write_inventory(local, '.dat/local')
 
         # Report conflicts
         all_conflict = pull_conflict | push_conflict | purg_conflict | kill_conflict
@@ -613,7 +599,7 @@ def dat_status(remote):
             print(green('Local is current with remote'))
     else:
         if len(local) == 0:
-            if pushed:
+            if config['pushed'] == 'True':
                 print(red('Local dat empty; never been pulled?'))
         else:
             if len(push | purg) > 0:

@@ -102,24 +102,14 @@ def read_inventory(fname):
         out = {}
     return out
 
-def read_config(push_check=False):
-    if os.path.isfile('.dat-config'):
-        config = open('.dat-config', 'r')
-        [loc,id] = config.readline().rstrip().split(':')
-        if len(id) == 0:
-            sys.exit(".dat-config file is empty")
-    else:
-        sys.exit('Not a dat repository; no .dat-config file')
-    if push_check:
-        if config.readline() == 'NEVER PUSHED\n':
-            config.close()
-            return([loc, id, False])
-        else:
-            config.close()
-            return([loc, id, True])
-    else:
-        config.close()
-        return([loc, id])
+def read_config():
+    if not os.path.isfile('.dat/config'):
+        sys.exit(red('Not a dat repository; no .dat-config file'))
+
+    config = {}
+    for line in open('.dat/config'):
+        y = line.split(': ')
+        config[y[0]] = y[1]
 
 def get_master(loc, id, local=None):
     if loc == 'aws':

@@ -1,3 +1,5 @@
+[![GitHub version](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pbreheny/dat/master/.version.json&style=flat&logo=github)](https://github.com/pbreheny/dat)
+
 # dat: A push/pull system for keeping files synchronized without version control
 
 Motivation: `git` is great, but if you have lots of big binary files, the `git` repo becomes enormous. Furthermore, if these files include private data, you might not want to host them on GitHub. `dat` allows you to push and pull like `git`, but with very little overhead (because it doesn't do version control).

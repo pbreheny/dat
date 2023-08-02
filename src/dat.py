@@ -191,9 +191,10 @@ def resolve_push_conflicts(current, local, master, push, hard=True):
     for f in push:
         if f in local.keys():
             if f in master.keys():
-                if master[f] == local[f] and hard:
-                    master[f] = current[f] # Good for push
-                    local[f] = current[f]  # Good for push
+                if master[f] == local[f]:
+                    if hard:
+                        master[f] = current[f] # Good for push
+                        local[f] = current[f]  # Good for push
                 elif master[f] == current[f]:
                     local[f] = current[f]  # OK, resolve locally
                     resolved.add(f)
@@ -219,11 +220,11 @@ def resolve_purge_conflicts(master, local, purge, hard=True):
     resolved = set()
     for f in purge:
         if f in master.keys():
-            if master[f] == local[f] and hard:
+            if master[f] != local[f]:
+                conflict.add(f)
+            elif hard:
                 master.pop(f)  # OK, go ahead with purge
                 local.pop(f)
-            else:
-                conflict.add(f)
         else:
             local.pop(f)  # Handle quietly; just fix local
             resolved.add(f)
@@ -235,8 +236,8 @@ def resolve_pull_conflicts(current, local, master, pull, hard=True):
     for f in pull:
         if f in local.keys():
             if f in current.keys():
-                if current[f] == local[f] and hard:
-                    local[f] = master[f]  # Good
+                if current[f] == local[f]:
+                    if hard: local[f] = master[f]  # Good
                 elif current[f] == master[f]:
                     local[f] = master[f]  # OK, resolve locally
                     resolved.add(f)
@@ -260,10 +261,10 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
     resolved = set()
     for f in kill:
         if f in current.keys():
-            if current[f] == local[f] and hard:
-                local.pop(f)  # OK, go ahead with purge
-            else:
+            if current[f] != local[f]:
                 conflict.add(f)
+            elif hard:
+                local.pop(f)  # OK, go ahead with purge
         else:
             local.pop(f)  # OK, handle quietly
             resolved.add(f)
@@ -583,8 +584,6 @@ def dat_status(remote):
         local = olocal.copy()
         [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill, hard=False)
         write_inventory(local, '.dat/local')
-
-        # Silently handle resolved files
 
         # Report conflicts
         all_conflict = pull_conflict | push_conflict | purg_conflict | kill_conflict

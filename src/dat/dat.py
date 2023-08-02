@@ -2,7 +2,7 @@
 """Push/pull system for cloud synchronization
 
 Usage:
-    dat init [--profile=<profile>] [<bucket>]
+    dat init [--profile=<profile>] [--subdir=<subdir>] [<bucket>]
     dat checkout <file>
     dat clone <folder>
     dat clone <bucket> <folder>
@@ -20,6 +20,10 @@ Arguments:
     -d         Dry run?
     -r         Check status against remote?
     --hard     Overwrites existing files when popping stash
+
+Options:
+    profile    Named profile to be passed to aws cli
+    subdir     Name of subdirectory to track (instead of current dir)
 """
 
 # Definitions:
@@ -44,7 +48,7 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
-    if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
+    if arg['init']: dat_init(arg['<bucket>'], arg['--profile'], arg['--subdir'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'])
     elif arg['delete']: dat_delete(arg['-p'])
@@ -203,7 +207,7 @@ def resolve_push_conflicts(current, local, master, push):
                     conflict.add(f)
             else:
                 master[f] = current[f] # Remote deletion, but go ahead and push new
-                local[f] = current[f] # Remote deletion, but go ahead and push new
+                local[f] = current[f]  # Remote deletion, but go ahead and push new
         else:
             if f in master.keys():
                 if master[f] == current[f]:
@@ -306,7 +310,7 @@ def dat_checkout(filename):
 def dat_clone(bucket, folder):
 
     # Process bucket
-    if bucket is None: bucket = 'aws:pbreheny.' + os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower() + '.' + folder.lower()
+    if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
     if ':' not in bucket: exit('Error: Central location must be of form aws:id or hpc:id')
     [loc, id] = bucket.split(':')
 
@@ -384,26 +388,29 @@ def dat_delete():
     if os.path.isfile('.dat-local'): os.remove('.dat-local')
     os.system('echo "NEVER PUSHED" >> .dat-config')
 
-def dat_init(id, profile):
+def dat_init(id, profile, subdir):
 
     # Don't overwrite existing config
-    if os.path.isfile('.dat-config'):
-        exit(red('Error: .dat-config already exists'))
+    if os.path.isdir('.dat'):
+        exit(red('Error: .dat directory already exists'))
+    else:
+        os.mkdir('.dat')
 
     # Create id
     if id is None:
         id = os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()
 
     # Write config file
-    f = open('.dat-config', 'w')
-    f.write('aws:' + id + '\n')
+    config = open('.dat/config', 'w')
+    config.write(f'aws: {id}\n')
+    config.write(f'pushed: False\n')
+    if subdir is not None: config.write(f'subdir: {subdir}\n')
     if profile is not None:
-        f.write(f'profile: {profile}\n')
+        config.write(f'profile: {profile}\n')
         print(green(f'Configured for profile={profile} aws bucket: ') + id)
     else:
         print(green('Configured for aws bucket: ') + id)
-    f.write('NEVER PUSHED\n')
-    f.close()
+    config.close()
 
 def dat_pull(dry=False):
 

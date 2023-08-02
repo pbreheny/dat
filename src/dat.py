@@ -129,10 +129,10 @@ def get_master(config, local=None):
         except ClientError:
             quit(red('Token has expired; run "aws login"'))
 
-        bucket = id.split('/')[0]
+        bucket = config['aws'].split('/')[0]
         if bucket in allBuckets:
             base = config.get('subdir', '.')
-            cmd = f'aws s3 cp s3://{id}/.dat/master {base}'
+            cmd = f"aws s3 cp s3://{config['aws']}/.dat/master {base}"
             if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
             a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
             if os.path.isfile(base + '/.dat/master'):
@@ -282,7 +282,7 @@ def dat_checkout(filename):
     dest = fd + '/' + ff
 
     # Pull file
-    cmd = f"aws s3 cp s3://{config['id']}/{filename} {dest}"
+    cmd = f"aws s3 cp s3://{config['aws']}/{filename} {dest}"
     if 'profile' in config.keys():
         cmd = cmd + f" --profile {config['profile']}"
         boto3.setup_default_session(profile_name=config['profile'])
@@ -430,7 +430,7 @@ def dat_pull(dry=False):
         for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
         base = config.get('subdir', '.')
-        cmd = f"aws s3 sync s3://{config['id']} {base} {opt}"
+        cmd = f"aws s3 sync s3://{config['aws']} {base} {opt}"
         if 'profile' in config.keys():
             cmd = cmd + f" --profile {config['profile']}"
         if dry:
@@ -481,7 +481,7 @@ def dat_push(dry=False):
         if 'profile' in config.keys():
             opt = opt + f" --profile {config['profile']}"
         base = config.get('subdir', '.')
-        cmd = f"aws s3 sync --no-follow-symlinks {base} s3://{config['id']} {opt}"
+        cmd = f"aws s3 sync --no-follow-symlinks {base} s3://{config['aws']} {opt}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))

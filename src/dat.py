@@ -294,7 +294,7 @@ def dat_checkout(filename):
     os.system(cmd)
 
     # Update manifest
-    current = take_inventory()
+    current = take_inventory(config)
     local = read_inventory('.dat/local')
     local[filename] = current[filename]
     write_inventory(local, '.dat/local')
@@ -405,7 +405,7 @@ def dat_pull(dry=False):
     config = read_config()
 
     # Get master/current/local
-    current = take_inventory()
+    current = take_inventory(config)
     local = read_inventory('.dat/local')
     master = get_master(config)
 
@@ -449,7 +449,7 @@ def dat_push(dry=False):
     config = read_config()
 
     # Get current/local
-    current = take_inventory()
+    current = take_inventory(config)
     local = read_inventory('.dat/local')
 
     # Create push, purg lists
@@ -519,7 +519,7 @@ def dat_stash():
     if os.path.isdir('.dat/stash'): exit('Error: Unpopped stash detected!')
 
     # Get master/current/local
-    current = take_inventory()
+    current = take_inventory(config)
     local = read_inventory('.dat/local')
     master = get_master(config)
     if len(local) == 0: local = current
@@ -544,7 +544,7 @@ def dat_status(remote):
     config = read_config()
 
     # Get current/local
-    current = take_inventory()
+    current = take_inventory(config)
     local = read_inventory('.dat/local')
 
     if config['pushed'] == 'False':

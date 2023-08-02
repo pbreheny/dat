@@ -446,7 +446,7 @@ def dat_pull(dry=False):
 def dat_push(dry=False):
 
     # Read in config file
-    config = read_config(True)
+    config = read_config()
 
     # Get current/local
     current = take_inventory()
@@ -541,7 +541,7 @@ def dat_stash():
 def dat_status(remote):
 
     # Read in config file
-    config = read_config(True)
+    config = read_config()
 
     # Get current/local
     current = take_inventory()

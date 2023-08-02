@@ -11,4 +11,4 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-dat = "dat:dat"
+dat = "dat.dat:dat"

@@ -6,7 +6,7 @@ Usage:
     dat checkout <file>
     dat clone [--profile=<profile>] [--subdir=<subdir>] <folder>
     dat clone [--profile=<profile>] [--subdir=<subdir>] <bucket> <folder>
-    dat [-p] delete
+    dat delete
     dat [-d] pull
     dat [-d] push
     dat stash
@@ -51,7 +51,7 @@ def dat():
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'], arg['--subdir'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'], arg['--subdir'])
-    elif arg['delete']: dat_delete(arg['-p'])
+    elif arg['delete']: dat_delete()
     elif arg['push']: dat_push(arg['-d'])
     elif arg['pull']: dat_pull(arg['-d'])
     elif arg['stash']:

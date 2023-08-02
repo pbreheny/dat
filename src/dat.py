@@ -349,7 +349,7 @@ def dat_delete():
     config = read_config()
 
     # Delete remote files (+ bucket)
-    cmd = f"aws s3 rm s3://{config['id']} --recursive"
+    cmd = f"aws s3 rm s3://{config['aws']} --recursive"
     if 'profile' in config.keys():
         cmd = cmd + f" --profile {config['profile']}"
     if 'subdir' in config.keys():
@@ -366,11 +366,11 @@ def dat_delete():
         except ClientError:
             quit(red('Token has expired; run "aws login"'))
 
-        if id in all_buckets:
+        if config['aws'] in all_buckets:
             os.system(cmd)
-            s3.delete_bucket(Bucket=id)
+            s3.delete_bucket(Bucket=config['aws'])
         else:
-            quit(red('Bucket ' + id + ' does not exist'))
+            quit(red(f"Bucket {config['aws']} does not exist"))
 
     # Local
     if os.path.isfile('.dat/local'): os.remove('.dat/local')

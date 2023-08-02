@@ -112,8 +112,8 @@ def read_config():
         config[y[0]] = y[1].strip()
     return config
 
-def write_config(config):
-    config_file = open('.dat/config', 'w')
+def write_config(config, filename='.dat/config'):
+    config_file = open(filename, 'w')
     for k in sorted(config.keys()):
         config_file.write(f"{k}: {config[k]}")
     config_file.close()
@@ -307,7 +307,7 @@ def dat_clone(bucket, folder, profile=None, subdir=None):
     [loc, id] = bucket.split(':')
 
     # Create folder
-    if os.path.isdir(folder): exit('Error: Directory "' + folder + '" already exists')
+    if os.path.isdir(folder): sys.exit(red(f'Error: Directory "{folder}" already exists'))
     os.mkdir(folder)
 
     # Clone
@@ -336,7 +336,7 @@ def dat_clone(bucket, folder, profile=None, subdir=None):
     config[loc] = id
     if profile is not None: config['profile'] = profile
     if subdir is not None: config['subdir'] = subdir
-    write_config(config)
+    write_config(config, f'{folder}/.dat/config')
 
     # Convert if old-style dat format
     if os.path.isfile(folder + '/.dat/master'):

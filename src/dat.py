@@ -131,13 +131,12 @@ def get_master(config, local=None):
 
         bucket = config['aws'].split('/')[0]
         if bucket in allBuckets:
-            base = config.get('subdir', '.')
-            cmd = f"aws s3 cp s3://{config['aws']}/.dat/master {base}"
+            cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
             if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
             a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            if os.path.isfile(base + '/.dat/master'):
-                master = read_inventory(base + '/.dat/master')
-                os.remove(base + '/.dat/master')
+            if os.path.isfile('/.dat/master'):
+                master = read_inventory('/.dat/master')
+                os.remove('/.dat/master')
             else:
                 master = local
         else:

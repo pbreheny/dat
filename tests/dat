@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-import os
-import sys
 from dat import *
 def escape_ansi(line):
     ansi_escape =re.compile(r'(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]')
     return ansi_escape.sub('', line)
 
 os.chdir('obj/1')
-[loc, id] = read_config()
+config = read_config()
 
 # Get master/current/local (and make copies)
-current = take_inventory()
-local = read_inventory('.dat-local')
-master = get_master(loc, id)
+current = take_inventory(config)
+local = read_inventory('.dat/local')
+master = get_master(config)
 olocal = local.copy()
 omaster = master.copy()
 
@@ -104,7 +102,7 @@ else:
 
 # push test
 message = subprocess.run('dat -d push', shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE).stdout.decode()
-target = '''Unable to push the following files: conflict with master\nc.txt\nf.txt\nh.txt\naws s3 sync --no-follow-symlinks . s3://pbreheny.dropbox.bin.tests.dat --delete --exclude "*" --include .dat-master --include "a.txt" --include "e.txt" --include "j.txt" --include "k.txt" --profile personal\nResolved: [\'d.txt\', \'g.txt\', \'l.txt\']\n'''
+target = '''Unable to push the following files: conflict with master\nc.txt\nf.txt\nh.txt\naws s3 sync --no-follow-symlinks . s3://pbreheny.dropbox.bin.tests.dat --delete --exclude "*" --include .dat/master --include "a.txt" --include "e.txt" --include "j.txt" --include "k.txt" --profile personal\nResolved: [\'d.txt\', \'g.txt\', \'l.txt\']\n'''
 if escape_ansi(message) == target:
     print(green('dat_push(): Correct!'))
 else:
@@ -123,4 +121,4 @@ else:
     print(message)
 
 # restore
-os.system('git restore .dat-local')
+os.system('git restore .dat/local')

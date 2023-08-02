@@ -44,7 +44,7 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
-    if arg['init']: dat_init(arg['<bucket>'], arg['<profile>'])
+    if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'])
     elif arg['delete']: dat_delete(arg['-p'])
@@ -347,7 +347,7 @@ def dat_clone(bucket, folder):
     else:
         print('Warning: No .dat-master file -- upgrade dat version to md5')
 
-def dat_delete(personal=False):
+def dat_delete():
 
     # Read in config file
     [loc, id, pushed] = read_config(True)

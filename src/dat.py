@@ -91,8 +91,8 @@ def write_inventory(x, fname):
         f.write(d + '\t' + x[d] + '\n')
     f.close()
 
-def read_inventory(fname):
-    if os.path.isfile('.dat/local'):
+def read_inventory(fname = '.dat/local'):
+    if os.path.isfile(fname):
         f = open(fname)
         out = dict()
         for line in f:
@@ -134,15 +134,15 @@ def get_master(config, local=None):
             cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
             if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
             a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            if os.path.isfile('/.dat/master'):
-                master = read_inventory('/.dat/master')
-                os.remove('/.dat/master')
+            if os.path.isfile('.dat/master'):
+                master = read_inventory('.dat/master')
+                os.remove('.dat/master')
             else:
-                master = local
+                master = local.copy()
         else:
             if local is not None:
                 s3.create_bucket(Bucket=bucket)
-                master = local
+                master = local.copy()
             else:
                 sys.exit(red('Remote bucket not created yet'))
     else:

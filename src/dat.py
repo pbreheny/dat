@@ -101,14 +101,14 @@ def read_inventory(fname = '.dat/local'):
         out = {}
     return out
 
-def read_config():
-    if not os.path.isfile('.dat/config'):
-        sys.exit(red('Not a dat repository; no .dat/config file'))
+def read_config(filename='.dat/config'):
+    if not os.path.isfile(filename):
+        sys.exit(red(f'Not a dat repository; {filename} does not exit'))
 
     config = {}
-    for line in open('.dat/config'):
-        y = line.split(': ')
-        config[y[0]] = y[1].strip()
+    for line in open(filename):
+        y = [x.strip() for x in line.split(':')]
+        config[y[0]] = y[1]
     return config
 
 def write_config(config, filename='.dat/config'):

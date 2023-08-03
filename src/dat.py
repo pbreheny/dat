@@ -42,7 +42,6 @@ import hashlib
 import platform
 import subprocess
 from glob import glob
-from boto3.session import botocore
 from botocore.exceptions import ClientError
 from docopt import docopt
 
@@ -79,7 +78,7 @@ def take_inventory(config):
     for root, dirs, files in os.walk(base):
         for file in files:
             inv.append(re.sub('^\\./', '', root + '/' + file))
-    inv = [x for x in inv if not x.startswith('.dat')]
+    inv = [x for x in inv if not x.startswith('.dat') and not x.startswith('.git')]
     out = dict()
     for f in inv:
         out[f] = md5(f)
@@ -373,13 +372,12 @@ def dat_delete():
         if config['aws'] in all_buckets:
             os.system(cmd)
             s3.delete_bucket(Bucket=config['aws'])
+            print(f"Deleted aws bucket: {config['aws']}")
         else:
             quit(red(f"Bucket {config['aws']} does not exist"))
 
-    # Local
-    if os.path.isfile('.dat/local'): os.remove('.dat/local')
-    config['pushed'] = 'False'
-    write_config(config)
+    # Delete .dat folder
+    shutil.rmtree('.dat')
 
 def dat_init(id, profile, subdir):
 

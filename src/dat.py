@@ -487,10 +487,10 @@ def dat_push(dry=False):
             print(cmd)
             print('Resolved: ' + str(resolved))
         else:
-            write_inventory(master, base + '/.dat/master')
+            write_inventory(master, '.dat/master')
             os.system(cmd)
             write_inventory(local, '.dat/local')
-            os.remove(base + '/.dat/master')
+            os.remove('.dat/master')
     elif len(conflict) == 0:
         if not dry: write_inventory(local, '.dat/local')
         exit('Everything up-to-date')

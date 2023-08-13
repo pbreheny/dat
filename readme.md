@@ -53,6 +53,6 @@ dat -r status
 
 ## To do
 
+* Need better tools for resolving conflicts, like `ours` / `theirs` in `git`
 * Limited testing by users other than me
-* Would be nice to include more `git`-like tools: `.datignore`, `dat reset` and so on to roll back accidental changes, etc.
 * Currently specific to AWS, would be neat if it worked with, say, Google Drive as well.

@@ -23,7 +23,7 @@ dat init
 dat push
 ```
 
-By default, this will create a bucket called `username.path.to.dir`. For example, if your username is jsmith7 and your `dat` directory is `HOME/pdf/articles`, the default bucket name is `jsmith7.pdf.artcles`. Alternatively, you can run `dat init <bucket>` and specify your own bucket name.
+By default, this will create a bucket called `username.path.to.dir`. For example, if your username is jsmith7 and your `dat` directory is `HOME/pdf/articles`, the default bucket name is `jsmith7.pdf.artcles`. Alternatively, you can run `dat init <bucket>` and specify your own bucket name. In particular, you can specify something like `jsmith7.pdf/articles` if the bucket `jsmith7.pdf` already exists and you want the `articles` folder on your local machine to mirror the `articles` subdirectory of that bucket.
 
 If you are on a different machine (still with username `jsmith7`) and go to the `pdf` folder, you can then run
 

@@ -2,10 +2,10 @@
 """Push/pull system for cloud synchronization
 
 Usage:
-    dat init [--profile=<profile>] [--subdir=<subdir>] [<bucket>]
+    dat init [--profile=<profile>] [<bucket>]
     dat checkout <file>
-    dat clone [--profile=<profile>] [--subdir=<subdir>] <folder>
-    dat clone [--profile=<profile>] [--subdir=<subdir>] <bucket> <folder>
+    dat clone [--profile=<profile>] <folder>
+    dat clone [--profile=<profile>] <bucket> <folder>
     dat delete
     dat [-d] pull
     dat [-d] push
@@ -23,7 +23,6 @@ Arguments:
 
 Options:
     profile    Named profile to be passed to aws cli
-    subdir     Name of subdirectory to track (instead of current dir)
 """
 
 # Definitions:
@@ -47,9 +46,9 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
-    if arg['init']: dat_init(arg['<bucket>'], arg['--profile'], arg['--subdir'])
+    if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
-    elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'], arg['--subdir'])
+    elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'])
     elif arg['delete']: dat_delete()
     elif arg['push']: dat_push(arg['-d'])
     elif arg['pull']: dat_pull(arg['-d'])
@@ -73,9 +72,8 @@ def md5(fname):
     return hash_md5.hexdigest()
 
 def take_inventory(config):
-    base = config.get('subdir', '.')
     inv = []
-    for root, dirs, files in os.walk(base):
+    for root, dirs, files in os.walk('.'):
         for file in files:
             inv.append(re.sub('^\\./', '', root + '/' + file))
     inv = [x for x in inv if not x.startswith('.dat') and not x.startswith('.git')]
@@ -298,7 +296,7 @@ def dat_checkout(filename):
     local[filename] = current[filename]
     write_inventory(local, '.dat/local')
 
-def dat_clone(bucket, folder, profile=None, subdir=None):
+def dat_clone(bucket, folder, profile=None):
 
     # Process bucket
     if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
@@ -337,7 +335,6 @@ def dat_clone(bucket, folder, profile=None, subdir=None):
     config = {'pushed': 'True'}
     config[loc] = id
     if profile is not None: config['profile'] = profile
-    if subdir is not None: config['subdir'] = subdir
     write_config(config, f'{folder}/.dat/config')
 
     # Convert if old-style dat format
@@ -355,9 +352,7 @@ def dat_delete():
     cmd = f"aws s3 rm s3://{config['aws']} --recursive"
     if 'profile' in config.keys():
         cmd = cmd + f" --profile {config['profile']}"
-    if 'subdir' in config.keys():
-        os.system(cmd)
-    else:
+    if '/' not in config['aws']:
         if 'profile' in config.keys():
             session = boto3.Session(profile_name=config['profile'])
             s3 = session.client('s3')
@@ -379,7 +374,7 @@ def dat_delete():
     # Delete .dat folder
     shutil.rmtree('.dat')
 
-def dat_init(id, profile, subdir):
+def dat_init(id, profile):
 
     # Don't overwrite existing config
     if os.path.isdir('.dat'):
@@ -395,7 +390,6 @@ def dat_init(id, profile, subdir):
     config = open('.dat/config', 'w')
     config.write(f'aws: {id}\n')
     config.write(f'pushed: False\n')
-    if subdir is not None: config.write(f'subdir: {subdir}\n')
     if profile is not None:
         config.write(f'profile: {profile}\n')
         print(green(f'Configured for profile={profile} aws bucket: ') + id)
@@ -430,8 +424,7 @@ def dat_pull(dry=False):
         opt = '--delete --exclude "*"'
         for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        base = config.get('subdir', '.')
-        cmd = f"aws s3 sync s3://{config['aws']} {base} {opt}"
+        cmd = f"aws s3 sync s3://{config['aws']} . {opt}"
         if 'profile' in config.keys():
             cmd = cmd + f" --profile {config['profile']}"
         if dry:
@@ -481,8 +474,7 @@ def dat_push(dry=False):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
         if 'profile' in config.keys():
             opt = opt + f" --profile {config['profile']}"
-        base = config.get('subdir', '.')
-        cmd = f"aws s3 sync --no-follow-symlinks {base} s3://{config['aws']} {opt}"
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))

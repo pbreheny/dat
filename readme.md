@@ -54,5 +54,7 @@ dat -r status
 ## To do
 
 * Need better tools for resolving conflicts, like `ours` / `theirs` in `git`
+* Does this work with cross-account AWS sharing?
+* Should institute some sort of lock so that two operations can't do `dat` things at the same time.
 * Limited testing by users other than me
 * Currently specific to AWS, would be neat if it worked with, say, Google Drive as well.

@@ -117,31 +117,27 @@ def write_config(config, filename='.dat/config'):
 
 def get_master(config, local=None):
     if 'aws' in config.keys():
-        if 'profile' in config.keys():
-            boto3.setup_default_session(profile_name=config['profile'])
-        s3 = boto3.client('s3')
 
-        try:
-            allBuckets = [bucket['Name'] for bucket in s3.list_buckets()['Buckets']]
-        except ClientError:
-            quit(red('Token has expired; run "aws login"'))
+        # Try to get master
+        cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
+        if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
+        a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
-        bucket = config['aws'].split('/')[0]
-        if bucket in allBuckets:
-            cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
-            if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
-            a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            if os.path.isfile('.dat/master'):
-                master = read_inventory('.dat/master')
-                os.remove('.dat/master')
-            else:
-                master = local.copy()
+        if os.path.isfile('.dat/master'):
+            # download successful
+            master = read_inventory('.dat/master')
+            os.remove('.dat/master')
+        elif config['pushed'] == 'False':
+            # create bucket
+            if 'profile' in config.keys():
+                boto3.setup_default_session(profile_name=config['profile'])
+            s3 = boto3.client('s3')
+            bucket = config['aws'].split('/')[0]
+            s3.create_bucket(Bucket=bucket)
+            master = local.copy()
         else:
-            if local is not None:
-                s3.create_bucket(Bucket=bucket)
-                master = local.copy()
-            else:
-                sys.exit(red('Remote bucket not created yet'))
+            # something went wrong
+            quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
         sys.exit(red('Only aws pulls are supported in this version'))
     return master

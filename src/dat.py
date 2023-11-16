@@ -293,7 +293,6 @@ def dat_checkout(filename):
     write_inventory(local, '.dat/local')
 
 def dat_clone(bucket, folder, profile=None):
-    print('a')
 
     # Process bucket
     if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
@@ -308,9 +307,7 @@ def dat_clone(bucket, folder, profile=None):
     os.mkdir(folder)
 
     # Clone
-    print('b')
     if loc == 'aws':
-        print('c')
         cmd = 'aws s3 sync s3://' + id + '/ ' + folder + '/'
         if profile is not None:
             cmd = cmd + f' --profile {profile}'

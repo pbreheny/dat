@@ -278,13 +278,10 @@ def dat_checkout(filename):
     cmd = f"aws s3 cp s3://{config['aws']}/{filename} {dest}"
     if 'profile' in config.keys():
         cmd = cmd + f" --profile {config['profile']}"
-        boto3.setup_default_session(profile_name=config['profile'])
-    s3 = boto3.client('s3')
     try:
-        allBuckets = [bucket['Name'] for bucket in s3.list_buckets()['Buckets']]
-    except ClientError:
-        quit(red('Token has expired; run "aws login"'))
-    os.system(cmd)
+        os.system(cmd)
+    except:
+        quit(red('Failed to pull file; are you logged in?'))
 
     # Update manifest
     current = take_inventory(config)

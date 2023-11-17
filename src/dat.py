@@ -292,7 +292,9 @@ def dat_checkout(filename):
 def dat_clone(bucket, folder, profile=None):
 
     # Process bucket
-    if bucket is None: bucket = f"aws:{os.environ['USERNAME']}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
+    if bucket is None:
+        username = os.environ.get('USERNAME') or os.environ.get('USER')
+        bucket = f"aws:{username}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
     if ':' not in bucket:
         loc = 'aws'
         id = bucket
@@ -377,7 +379,8 @@ def dat_init(id, profile):
 
     # Create id
     if id is None:
-        id = os.environ['USERNAME'] + '.' + os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()
+        username = os.environ.get('USERNAME') or os.environ.get('USER')
+        id = f"{username}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}"
 
     # Write config file
     config = open('.dat/config', 'w')

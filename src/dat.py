@@ -4,7 +4,7 @@
 Usage:
     dat init [--profile=<profile>] [<bucket>]
     dat checkout <file>
-    dat clone [--profile=<profile>] <folder>
+    dat clone [--profile=<profile>] <bucket>
     dat clone [--profile=<profile>] <bucket> <folder>
     dat delete
     dat [-d] pull
@@ -292,9 +292,7 @@ def dat_checkout(filename):
 def dat_clone(bucket, folder, profile=None):
 
     # Process bucket
-    if bucket is None:
-        username = os.environ.get('USERNAME') or os.environ.get('USER')
-        bucket = f"aws:{username}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}.{folder.lower()}"
+    if folder is None: folder = bucket
     if ':' not in bucket:
         loc = 'aws'
         id = bucket

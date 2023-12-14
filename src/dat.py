@@ -3,6 +3,7 @@
 
 Usage:
     dat init [--profile=<profile>] [<bucket>]
+    dat checkin <file>
     dat checkout <file>
     dat clone [--profile=<profile>] <bucket>
     dat clone [--profile=<profile>] <bucket> <folder>
@@ -47,6 +48,7 @@ from docopt import docopt
 def dat():
     arg = docopt(__doc__)
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
+    elif arg['checkin']: dat_checkin(arg['<file>'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'])
     elif arg['delete']: dat_delete()
@@ -262,6 +264,28 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
             local.pop(f)  # OK, handle quietly
             resolved.add(f)
     return [conflict, resolved]
+
+def dat_checkin(filename):
+
+    # Read in config file
+    config = read_config()
+
+    # Update manifest
+    current = take_inventory(config)
+    local = read_inventory('.dat/local')
+    local[filename] = current[filename]
+    write_inventory(local, '.dat/local')
+    master = get_master(config, local)
+    master[filename] = current[filename]
+
+    # Push file, master
+    cmd = f'''aws s3 sync --no-follow-symlinks ./ s3://{config['aws']}/ --exclude "*" --include ".dat/master" --include "{filename}"'''
+    if 'profile' in config.keys():
+        cmd = cmd + f" --profile {config['profile']}"
+    try:
+        os.system(cmd)
+    except:
+        quit(red('Failed to push file; are you logged in?'))
 
 def dat_checkout(filename):
 

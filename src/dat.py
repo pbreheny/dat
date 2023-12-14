@@ -268,6 +268,7 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
 def dat_checkin(filename):
 
     # Read in config file
+    if not os.path.isfile(filename): quit(red(f'"{filename}" does not exist'))
     config = read_config()
 
     # Update manifest
@@ -283,7 +284,10 @@ def dat_checkin(filename):
     if 'profile' in config.keys():
         cmd = cmd + f" --profile {config['profile']}"
     try:
+        write_inventory(master, '.dat/master')
         os.system(cmd)
+        write_inventory(local, '.dat/local')
+        os.remove('.dat/master')
     except:
         quit(red('Failed to push file; are you logged in?'))
 

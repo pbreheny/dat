@@ -78,7 +78,7 @@ def take_inventory(config):
     for root, dirs, files in os.walk('.'):
         for file in files:
             inv.append(re.sub('^\\./', '', root + '/' + file))
-    inv = [x for x in inv if not x.startswith('.dat') and not x.startswith('.git')]
+    inv = [x for x in inv if not x.startswith('.dat') and not x.startswith('.git') and not x == '.DS_Store']
     out = dict()
     for f in inv:
         out[f] = md5(f)

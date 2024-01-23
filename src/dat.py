@@ -8,8 +8,8 @@ Usage:
     dat clone [--profile=<profile>] <bucket>
     dat clone [--profile=<profile>] <bucket> <folder>
     dat delete
-    dat [-d] pull
-    dat [-d] push
+    dat [-d] [-v] pull
+    dat [-d] [-v] push
     dat stash
     dat stash pop
     dat stash pop --hard
@@ -20,6 +20,7 @@ Arguments:
     folder     Name of local folder
     -d         Dry run?
     -r         Check status against remote?
+    -v         Verbose? (for debugging)
     --hard     Overwrites existing files when popping stash
 
 Options:
@@ -52,8 +53,8 @@ def dat():
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'])
     elif arg['delete']: dat_delete()
-    elif arg['push']: dat_push(arg['-d'])
-    elif arg['pull']: dat_pull(arg['-d'])
+    elif arg['push']: dat_push(arg['-d'], arg['-v'])
+    elif arg['pull']: dat_pull(arg['-d'], arg['-v'])
     elif arg['stash']:
         if arg['pop']:
             dat_pop(arg['--hard'])
@@ -419,21 +420,26 @@ def dat_init(id, profile):
         print(green('Configured for aws bucket: ') + id)
     config.close()
 
-def dat_pull(dry=False):
+def dat_pull(dry=False, verbose=False):
 
     # Read in config file
+    if verbose: print('Reading config')
     config = read_config()
 
     # Get master/current/local
+    if verbose: print('Taking inventory')
     current = take_inventory(config)
     local = read_inventory('.dat/local')
+    if verbose: print('Obtaining master')
     master = get_master(config)
 
     # Create pull, purge lists
+    if verbose: print('Creating pull, purge lists')
     pull = needs_pull(master, local)
     kill = needs_kill(master, local)
 
     # Check for conflicts
+    if verbose: print('Checking for conflicts')
     [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
     [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
     conflict = sorted(pull_conflict | kill_conflict)
@@ -441,6 +447,7 @@ def dat_pull(dry=False):
         print(red("Unable to pull the following files: conflict with current\n  " + '\n  '.join(conflict)))
 
     # Sync
+    if verbose: print('Pulling')
     resolved = sorted(kill_resolved | pull_resolved)
     if len(pull | kill):
         opt = '--delete --exclude "*"'
@@ -462,16 +469,19 @@ def dat_pull(dry=False):
             write_inventory(local, '.dat/local')
         exit('Everything up-to-date')
 
-def dat_push(dry=False):
+def dat_push(dry=False, verbose=False):
 
     # Read in config file
+    if verbose: print('Reading config')
     config = read_config()
 
     # Get current/local
+    if verbose: print('Taking inventory')
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
     # Create push, purg lists
+    if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)
 
@@ -479,9 +489,11 @@ def dat_push(dry=False):
     if len(push | purg) == 0:
         exit('Everything up-to-date')
     else:
+        if verbose: print('Obtaining master')
         master = get_master(config, local)
 
     # Check for conflicts
+    if verbose: print('Checking for conflicts')
     [push_conflict, push_resolved] = resolve_push_conflicts(current, local, master, push)
     [purg_conflict, purg_resolved] = resolve_purge_conflicts(master, local, purg)
     conflict = sorted(push_conflict | purg_conflict)
@@ -489,6 +501,7 @@ def dat_push(dry=False):
         print(red("Unable to push the following files: conflict with master\n" + '\n'.join(conflict)))
 
     # Sync
+    if verbose: print('Pushing')
     resolved = sorted(push_resolved | purg_resolved)
     if len(push | purg):
         opt = '--delete --exclude "*" --include .dat/master'

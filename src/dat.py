@@ -14,6 +14,8 @@ Usage:
     dat stash pop
     dat stash pop --hard
     dat [-r] status
+    dat overwrite-master
+    dat repair-master
 
 Arguments:
     bucket     Name of bucket (ex: my-bucket)
@@ -42,6 +44,7 @@ import shutil
 import hashlib
 import platform
 import subprocess
+import textwrap
 from glob import glob
 from botocore.exceptions import ClientError
 from docopt import docopt
@@ -61,6 +64,8 @@ def dat():
         else:
             dat_stash()
     elif arg['status']: dat_status(arg['-r'])
+    elif arg['overwrite-master']: dat_overwrite_master()
+    elif arg['repair-master']: dat_repair_master()
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
@@ -420,6 +425,30 @@ def dat_init(id, profile):
         print(green('Configured for aws bucket: ') + id)
     config.close()
 
+def dat_overwrite_master():
+
+    config = read_config()
+    terminal_width = shutil.get_terminal_size().columns
+    msg = 'Warning: This will completely replace the remote dat repository with your local copy. Are you sure you want to do this?'
+    confirm = input(textwrap.fill(msg, width=terminal_width) + '\nPress (y) to confirm: ')
+    if confirm != 'y': quit('Exiting...')
+
+    # Take inventory
+    current = take_inventory(config)
+    write_inventory(current, '.dat/master')
+    if os.path.isfile('.dat/local'): os.remove('.dat/local')
+
+    # Overwrite
+    cmd = f'''aws s3 sync --no-follow-symlinks --delete ./ s3://{config['aws']}/'''
+    if 'profile' in config.keys():
+        cmd = cmd + f" --profile {config['profile']}"
+    try:
+        os.system(cmd)
+        write_inventory(current, '.dat/local')
+        os.remove('.dat/master')
+    except:
+        quit(red('Failed to push file; are you logged in?'))
+
 def dat_pull(dry=False, verbose=False):
 
     # Read in config file
@@ -540,6 +569,9 @@ def dat_pop(hard=False):
             shutil.move(f, '.')
     os.rmdir('.dat/stash')
     return()
+
+def dat_repair_master():
+    quit('This function does not work yet')
 
 def dat_stash():
 

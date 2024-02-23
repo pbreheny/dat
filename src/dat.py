@@ -111,6 +111,17 @@ def read_config(filename='.dat/config'):
     if not os.path.isfile(filename):
         sys.exit(red(f'Not a dat repository; {filename} does not exit'))
 
+    if os.path.isfile('.dat/local'):
+        try:
+            subprocess.run('git rev-parse --is-inside-work-tree-ignore .dat/local', shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            x = subprocess.run('git check-ignore .dat/local', shell=True, stdout=subprocess.PIPE).stdout.decode().strip()
+            terminal_width = shutil.get_terminal_size().columns
+            if x != '.dat/local':
+                msg = 'Warning! You appear to be tracking .dat/local with git. This will almost certainly prevent dat from working correctly. Add'
+                print(red(textwrap.fill(msg, width=terminal_width) + '\n**/.dat/local\nto your .gitignore file'))
+        except:
+            pass
+
     config = {}
     for line in open(filename):
         y = [x.strip() for x in line.split(':')]

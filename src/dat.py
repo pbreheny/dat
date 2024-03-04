@@ -582,7 +582,35 @@ def dat_pop(hard=False):
     return()
 
 def dat_repair_master():
-    quit('This function does not work yet')
+    # download master
+    config = read_config()
+    if os.path.isdir('.dat/remote'):
+        quit(red('.dat/remote: This directory already exists. repair-master cannot continue'))
+    cmd = f"aws s3 cp s3://{config['aws']} .dat/remote --recursive"
+    if 'profile' in config.keys():
+        cmd = cmd + f" --profile {config['profile']}"
+    try:
+        os.system(cmd)
+    except:
+        quit(red('Failed to download remote; are you logged in?'))
+
+    # take inventory
+    os.chdir('.dat/remote')
+    master = take_inventory(config)
+    write_inventory(master, '.dat/master')
+    os.chdir('../../')
+
+    # upload master
+    cmd = f"aws s3 sync --no-follow-symlinks --delete .dat/remote s3://{config['aws']}/"
+    if 'profile' in config.keys():
+        cmd = cmd + f" --profile {config['profile']}"
+    try:
+        os.system(cmd)
+    except:
+        quit(red('Failed to upload master; are you logged in?'))
+
+    # clean up
+    shutil.rmtree('.dat/remote')
 
 def dat_stash():
 

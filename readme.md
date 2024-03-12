@@ -51,10 +51,39 @@ To check against the remote to see if anything needs pushing or pulling
 dat -r status
 ```
 
+## AWS permissions
+
+When using `dat` to share a repository between AWS accounts, be aware that in addition to S3 `GetObject` permissions on the objects in the bucket, you also need to grant `ListBucket` permissions for `dat` to work because `aws s3 sync` needs to list all the objects in the bucket to determine which files need to be copied over.
+
+Specifically, your S3 bucket policy statement needs to look something like this:
+
+``` json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::123456789101:user/Username"
+            },
+            "Action": "s3:*",
+            "Resource": "arn:aws:s3:::my.s3.bucket/*"
+        },
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::123456789101:user/Username"
+            },
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::my.s3.bucket"
+        }
+    ]
+}
+```
+
 ## To do
 
 * Need better tools for resolving conflicts, like `ours` / `theirs` in `git`
-* Does this work with cross-account AWS sharing?
 * Should institute some sort of lock so that two operations can't do `dat` things at the same time.
 * Limited testing by users other than me
 * Currently specific to AWS, would be neat if it worked with, say, Google Drive as well.

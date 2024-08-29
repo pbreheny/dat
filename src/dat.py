@@ -8,12 +8,12 @@ Usage:
     dat clone [--profile=<profile>] <bucket>
     dat clone [--profile=<profile>] <bucket> <folder>
     dat delete
-    dat [-d] [-v] pull
-    dat [-d] [-v] push
+    dat [-d] [-v] [--region=<region>] pull
+    dat [-d] [-v] [--region=<region>] push
     dat stash
     dat stash pop
     dat stash pop --hard
-    dat [-r] status
+    dat [-r] [--region=<region>] status
     dat overwrite-master
     dat repair-master
 
@@ -27,7 +27,9 @@ Arguments:
 
 Options:
     profile    Named profile to be passed to aws cli
+    region     AWS region for the S3 bucket (default: us-east-1)
 """
+
 
 # Definitions:
 #   push: local file is changed/new

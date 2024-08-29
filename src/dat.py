@@ -56,8 +56,8 @@ def dat():
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'])
     elif arg['delete']: dat_delete()
-    elif arg['push']: dat_push(arg['-d'], arg['-v'])
-    elif arg['pull']: dat_pull(arg['-d'], arg['-v'])
+    elif arg['push']: dat_push(arg['-d'], arg['-v'], arg['--region'])
+    elif arg['pull']: dat_pull(arg['-d'], arg['-v'], arg['--region'])
     elif arg['stash']:
         if arg['pop']:
             dat_pop(arg['--hard'])
@@ -139,7 +139,8 @@ def get_master(config, local=None):
 
         # Try to get master
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
-        if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
+        if 'profile' in config.keys():
+            cmd = cmd + f" --profile {config['profile']}"
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
@@ -150,9 +151,14 @@ def get_master(config, local=None):
             # create bucket
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
-            s3 = boto3.client('s3')
+            s3 = boto3.client('s3', region_name=config.get('region', 'us-east-1'))
             bucket = config['aws'].split('/')[0]
-            s3.create_bucket(Bucket=bucket)
+            s3.create_bucket(
+                Bucket=bucket,
+                CreateBucketConfiguration={
+                    'LocationConstraint': config.get('region', 'us-east-1')
+                }
+            )
             master = local.copy()
         else:
             # something went wrong
@@ -160,6 +166,7 @@ def get_master(config, local=None):
     else:
         sys.exit(red('Only aws pulls are supported in this version'))
     return master
+
 
 def needs_push(current, local):
     push = set()
@@ -460,60 +467,13 @@ def dat_overwrite_master():
     except:
         quit(red('Failed to push file; are you logged in?'))
 
-def dat_pull(dry=False, verbose=False):
-
+def dat_push(dry=False, verbose=False, region='us-east-1'):
     # Read in config file
     if verbose: print('Reading config')
     config = read_config()
 
-    # Get master/current/local
-    if verbose: print('Taking inventory')
-    current = take_inventory(config)
-    local = read_inventory('.dat/local')
-    if verbose: print('Obtaining master')
-    master = get_master(config)
-
-    # Create pull, purge lists
-    if verbose: print('Creating pull, purge lists')
-    pull = needs_pull(master, local)
-    kill = needs_kill(master, local)
-
-    # Check for conflicts
-    if verbose: print('Checking for conflicts')
-    [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
-    [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
-    conflict = sorted(pull_conflict | kill_conflict)
-    if len(conflict) > 0:
-        print(red("Unable to pull the following files: conflict with current\n  " + '\n  '.join(conflict)))
-
-    # Sync
-    if verbose: print('Pulling')
-    resolved = sorted(kill_resolved | pull_resolved)
-    if len(pull | kill):
-        opt = '--delete --exclude "*"'
-        for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
-            opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        cmd = f"aws s3 sync s3://{config['aws']} . {opt}"
-        if 'profile' in config.keys():
-            cmd = cmd + f" --profile {config['profile']}"
-        if dry:
-            print(cmd)
-            print('Resolved: ' + str(resolved))
-        else:
-            os.system(cmd)
-            write_inventory(local, '.dat/local')
-    elif len(conflict) == 0:
-        if dry:
-            print('--no command issued--')
-        else:
-            write_inventory(local, '.dat/local')
-        exit('Everything up-to-date')
-
-def dat_push(dry=False, verbose=False):
-
-    # Read in config file
-    if verbose: print('Reading config')
-    config = read_config()
+    # Set the region
+    config['region'] = region if region else config.get('region', 'us-east-1')
 
     # Get current/local
     if verbose: print('Taking inventory')
@@ -549,7 +509,7 @@ def dat_push(dry=False, verbose=False):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
         if 'profile' in config.keys():
             opt = opt + f" --profile {config['profile']}"
-        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt}"
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {config['region']}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))
@@ -566,6 +526,58 @@ def dat_push(dry=False, verbose=False):
     if not dry:
         config['pushed'] = 'True'
         write_config(config)
+
+def dat_pull(dry=False, verbose=False, region='us-east-1'):
+    # Read in config file
+    if verbose: print('Reading config')
+    config = read_config()
+
+    # Set the region
+    config['region'] = region if region else config.get('region', 'us-east-1')
+
+    # Get master/current/local
+    if verbose: print('Taking inventory')
+    current = take_inventory(config)
+    local = read_inventory('.dat/local')
+    if verbose: print('Obtaining master')
+    master = get_master(config)
+
+    # Create pull, purge lists
+    if verbose: print('Creating pull, purge lists')
+    pull = needs_pull(master, local)
+    kill = needs_kill(master, local)
+
+    # Check for conflicts
+    if verbose: print('Checking for conflicts')
+    [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
+    [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
+    conflict = sorted(pull_conflict | kill_conflict)
+    if len(conflict) > 0:
+        print(red("Unable to pull the following files: conflict with current\n  " + '\n  '.join(conflict)))
+
+    # Sync
+    if verbose: print('Pulling')
+    resolved = sorted(kill_resolved | pull_resolved)
+    if len(pull | kill):
+        opt = '--delete --exclude "*"'
+        for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
+            opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
+        cmd = f"aws s3 sync s3://{config['aws']} . {opt} --region {config['region']}"
+        if 'profile' in config.keys():
+            cmd = cmd + f" --profile {config['profile']}"
+        if dry:
+            print(cmd)
+            print('Resolved: ' + str(resolved))
+        else:
+            os.system(cmd)
+            write_inventory(local, '.dat/local')
+    elif len(conflict) == 0:
+        if dry:
+            print('--no command issued--')
+        else:
+            write_inventory(local, '.dat/local')
+        exit('Everything up-to-date')
+
 
 def dat_pop(hard=False):
     if not os.path.isdir('.dat/stash'): exit('Error: No stash detected!')

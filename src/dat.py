@@ -51,6 +51,7 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
+    
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkin']: dat_checkin(arg['<file>'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
@@ -66,7 +67,14 @@ def dat():
     elif arg['status']: dat_status(arg['-r'])
     elif arg['overwrite-master']: dat_overwrite_master()
     elif arg['repair-master']: dat_repair_master()
-    elif arg['share']: dat_share(arg['<account_number>'], arg['<username>'], arg['--root'], arg['-v'])
+    elif arg['share']:
+        dat_share(
+            arg['<account_number>'],
+            arg['<username>'],
+            root=arg['--root'],
+            verbose=arg['-v']
+        )
+
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'

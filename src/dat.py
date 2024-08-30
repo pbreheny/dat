@@ -1,39 +1,38 @@
 #!/usr/bin/env python3
-"""Push/pull system for cloud synchronization
+"""
+Push/pull system for cloud synchronization
 
 Usage:
     dat init [--profile=<profile>] [<bucket>]
     dat checkin <file>
     dat checkout <file>
-    dat clone [--profile=<profile>] <bucket>
-    dat clone [--profile=<profile>] <bucket> <folder>
+    dat clone [--profile=<profile>] <bucket> [<folder>]
     dat delete
     dat [-d] [-v] [--region=<region>] pull
     dat [-d] [-v] [--region=<region>] push
     dat stash
-    dat stash pop
-    dat stash pop --hard
-    dat [-r] [--region=<region>] status
+    dat stash pop [--hard]
+    dat [-r] [-v] [--region=<region>] status
     dat overwrite-master
     dat repair-master
-    dat share <account_number> [<username>] [--root]
+    dat share <account_number> [<username>] [--root] [-v]
 
 Arguments:
-    bucket           Name of bucket (ex: my-bucket)
-    folder           Name of local folder
-    -d               Dry run?
-    -r               Check status against remote?
-    -v               Verbose? (for debugging)
-    username         IAM username to share the bucket with (omit if using --root)
+    bucket           Name of the S3 bucket (e.g., my-bucket)
+    folder           Name of the local folder
+    file             Name of the file to check in or out
     account_number   AWS account number associated with the IAM user
+    username         IAM username to share the bucket with (omit if using --root)
 
 Options:
-    profile          Named profile to be passed to aws cli
-    region           AWS region for the S3 bucket (default: us-east-1)
-    --hard           Overwrites existing files when popping stash
-    --root           Share the bucket with the root account (omit <username> when using this)
+    -d, --dry-run            Perform a trial run with no changes made
+    -r, --remote             Check status against remote repository
+    -v, --verbose            Enable verbose output for debugging
+    --region=<region>        AWS region for the S3 bucket [default: us-east-1]
+    --profile=<profile>      AWS CLI profile to use
+    --hard                   Overwrite existing files when popping stash
+    --root                   Share the bucket with the root account (omit <username> when using this)
 """
-
 
 # Setup
 import os
@@ -727,12 +726,28 @@ def dat_status(remote):
             else:
                 print(green('Nothing to push; local is clean'))
 
+import boto3
+import json
+from botocore.exceptions import ClientError
+
 def dat_share(account_number, username=None, root=False, verbose=False):
+    """
+    Shares the S3 bucket with another AWS account or IAM user.
+
+    Parameters:
+        account_number (str): The AWS account number to share the bucket with.
+        username (str, optional): The IAM username within the account. Required if root is False.
+        root (bool, optional): Whether to share with the root account. Defaults to False.
+        verbose (bool, optional): Enable verbose output for debugging. Defaults to False.
+    """
     # Read the bucket name from .dat/config
     config = read_config()
     if 'aws' not in config:
         raise ValueError("Bucket name not found in .dat/config.")
     bucket_name = config['aws'].split('/')[0]
+
+    if verbose:
+        print(f"[DEBUG] Bucket name extracted from config: {bucket_name}")
 
     # Set up the AWS S3 client
     s3 = boto3.client('s3')
@@ -742,73 +757,80 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         user_arn = f"arn:aws:iam::{account_number}:root"
     else:
         if not username:
-            raise ValueError("Username is required unless specifying root.")
+            raise ValueError("Username is required unless specifying --root.")
         user_arn = f"arn:aws:iam::{account_number}:user/{username}"
 
-    # Verbose: Print the ARN being used
     if verbose:
-        print(f"Using ARN: {user_arn}")
+        print(f"[DEBUG] Using ARN: {user_arn}")
 
-    # Construct the policy to add
-    new_statement = {
-        "Effect": "Allow",
-        "Principal": {
-            "AWS": user_arn
-        },
-        "Action": [
-            "s3:*"
-        ],
-        "Resource": [
-            f"arn:aws:s3:::{bucket_name}/*"
-        ]
-    }
+    # Construct the policy statements
+    statements = [
+        {
+            "Effect": "Allow",
+            "Principal": {"AWS": user_arn},
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                f"arn:aws:s3:::{bucket_name}",
+                f"arn:aws:s3:::{bucket_name}/*"
+            ]
+        }
+    ]
 
-    list_bucket_statement = {
-        "Effect": "Allow",
-        "Principal": {
-            "AWS": user_arn
-        },
-        "Action": "s3:ListBucket",
-        "Resource": f"arn:aws:s3:::{bucket_name}"
-    }
+    if verbose:
+        print(f"[DEBUG] Constructed policy statements: {json.dumps(statements, indent=2)}")
 
+    # Attempt to retrieve existing bucket policy
     try:
-        # Get the current bucket policy
-        current_policy = s3.get_bucket_policy(Bucket=bucket_name)
-        policy = json.loads(current_policy['Policy'])
+        response = s3.get_bucket_policy(Bucket=bucket_name)
+        policy = json.loads(response['Policy'])
+        if verbose:
+            print(f"[DEBUG] Existing bucket policy retrieved:\n{json.dumps(policy, indent=2)}")
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
-            # No policy exists, create a new one
+        error_code = e.response['Error']['Code']
+        if error_code == 'NoSuchBucketPolicy':
+            if verbose:
+                print(f"[DEBUG] No existing bucket policy found. Creating a new one.")
             policy = {
                 "Version": "2012-10-17",
                 "Statement": []
             }
         else:
-            raise  # Re-raise the exception if it's a different error
+            raise e
 
-    # Check if the user's ARN is already in the policy
-    existing_statements = [
-        statement for statement in policy['Statement']
-        if statement['Principal']['AWS'] == user_arn
-    ]
+    # Check for existing statements with the same principal
+    existing_principals = {
+        statement['Principal']['AWS'] for statement in policy['Statement']
+        if 'Principal' in statement and 'AWS' in statement['Principal']
+    }
 
-    if existing_statements:
-        print(f"User {username if not root else 'root'} already has access to the bucket {bucket_name}.")
-    else:
-        # Add the new statement to the policy
-        policy['Statement'].append(new_statement)
-        policy['Statement'].append(list_bucket_statement)
-
-        # Verbose: Print the policy being applied
+    if user_arn in existing_principals:
+        print(f"Access already granted to {user_arn} for bucket '{bucket_name}'.")
         if verbose:
-            print(f"Attempting to apply the following bucket policy:\n{json.dumps(policy, indent=2)}")
+            print(f"[DEBUG] No changes made to the bucket policy.")
+        return
 
-        # Update the bucket policy
-        try:
-            s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
-            print(f"Access for {username if not root else 'root'} added to the bucket {bucket_name}.")
-        except ClientError as e:
-            print(f"Failed to update bucket policy: {e.response['Error']['Message']}")
+    # Append new statements to the policy
+    policy['Statement'].extend(statements)
+
+    if verbose:
+        print(f"[DEBUG] Updated bucket policy to be applied:\n{json.dumps(policy, indent=2)}")
+
+    # Apply the updated policy
+    try:
+        s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+        print(f"Access successfully granted to {user_arn} for bucket '{bucket_name}'.")
+        if verbose:
+            print(f"[DEBUG] Bucket policy updated successfully.")
+    except ClientError as e:
+        print(f"Error applying bucket policy: {e.response['Error']['Message']}")
+        if verbose:
+            print(f"[DEBUG] Failed to update bucket policy due to error code: {e.response['Error']['Code']}")
+
 
 def read_config(filename='.dat/config'):
     if not os.path.isfile(filename):

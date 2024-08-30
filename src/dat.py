@@ -40,6 +40,7 @@ import os
 import re
 import sys
 import boto3
+import json
 import shutil
 import hashlib
 import platform
@@ -771,12 +772,16 @@ def dat_share(account_number, username=None, root=False):
         # Get the current bucket policy
         current_policy = s3.get_bucket_policy(Bucket=bucket_name)
         policy = json.loads(current_policy['Policy'])
-    except s3.exceptions.NoSuchBucketPolicy:
-        # No policy exists, create a new one
-        policy = {
-            "Version": "2012-10-17",
-            "Statement": []
-        }
+    except ClientError as e:
+        # Handle the case where there is no existing bucket policy
+        if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
+            # No policy exists, create a new one
+            policy = {
+                "Version": "2012-10-17",
+                "Statement": []
+            }
+        else:
+            raise  # Re-raise the exception if it's a different error
 
     # Check if the user's ARN is already in the policy
     existing_statements = [

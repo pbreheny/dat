@@ -12,14 +12,14 @@ Usage:
     dat [-d] [-v] [--region=<region>] push
     dat stash
     dat stash pop [--hard]
-    dat [-r] [-v] [--region=<region>] status
+    dat [-r] status
     dat overwrite-master
     dat repair-master
     dat share <account_number> [<username>] [--root] [-v]
 
 Arguments:
-    bucket           Name of the S3 bucket (e.g., my-bucket)
-    folder           Name of the local folder
+    bucket           Name of the bucket (ex: my-bucket)
+    folder           Name of local folder
     file             Name of the file to check in or out
     account_number   AWS account number associated with the IAM user
     username         IAM username to share the bucket with (omit if using --root)
@@ -66,7 +66,7 @@ def dat():
     elif arg['status']: dat_status(arg['-r'])
     elif arg['overwrite-master']: dat_overwrite_master()
     elif arg['repair-master']: dat_repair_master()
-    elif arg['share']: dat_share(arg['<username>'], arg['<account_number>'], arg['--root'], arg['-v'])
+    elif arg['share']: dat_share(arg['<account_number>'], arg['<username>'], arg['--root'], arg['-v'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'

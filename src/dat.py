@@ -25,9 +25,9 @@ Arguments:
     username         IAM username to share the bucket with (omit if using --root)
 
 Options:
-    -d, --dry-run            Perform a trial run with no changes made
-    -r, --remote             Check status against remote repository
-    -v, --verbose            Enable verbose output for debugging
+    -d                       Dry run?
+    -r                       Check status against remote?
+    -v                       Verbose? (for debugging)
     --region=<region>        AWS region for the S3 bucket [default: us-east-1]
     --profile=<profile>      AWS CLI profile to use
     --hard                   Overwrite existing files when popping stash

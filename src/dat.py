@@ -66,7 +66,7 @@ def dat():
     elif arg['status']: dat_status(arg['-r'])
     elif arg['overwrite-master']: dat_overwrite_master()
     elif arg['repair-master']: dat_repair_master()
-    elif arg['share']: dat_share(arg['<username>'], arg['<account_number>'])
+    elif arg['share']: dat_share(arg['<username>'], arg['<account_number>'], arg['--root'], arg['-v'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'

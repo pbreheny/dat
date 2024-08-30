@@ -726,7 +726,7 @@ def dat_status(remote):
             else:
                 print(green('Nothing to push; local is clean'))
 
-def dat_share(account_number, username=None, root=False):
+def dat_share(account_number, username=None, root=False, verbose=False):
     # Read the bucket name from .dat/config
     config = read_config()
     if 'aws' not in config:
@@ -743,6 +743,10 @@ def dat_share(account_number, username=None, root=False):
         if not username:
             raise ValueError("Username is required unless specifying root.")
         user_arn = f"arn:aws:iam::{account_number}:user/{username}"
+
+    # Verbose: Print the ARN being used
+    if verbose:
+        print(f"Using ARN: {user_arn}")
 
     # Construct the policy to add
     new_statement = {
@@ -793,6 +797,10 @@ def dat_share(account_number, username=None, root=False):
         # Add the new statement to the policy
         policy['Statement'].append(new_statement)
         policy['Statement'].append(list_bucket_statement)
+
+        # Verbose: Print the policy being applied
+        if verbose:
+            print(f"Attempting to apply the following bucket policy:\n{json.dumps(policy, indent=2)}")
 
         # Update the bucket policy
         try:

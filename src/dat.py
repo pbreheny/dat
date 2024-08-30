@@ -16,26 +16,22 @@ Usage:
     dat [-r] [--region=<region>] status
     dat overwrite-master
     dat repair-master
+    dat share <username> <account_number>
 
 Arguments:
-    bucket     Name of bucket (ex: my-bucket)
-    folder     Name of local folder
-    -d         Dry run?
-    -r         Check status against remote?
-    -v         Verbose? (for debugging)
-    --hard     Overwrites existing files when popping stash
+    bucket           Name of bucket (ex: my-bucket)
+    folder           Name of local folder
+    -d               Dry run?
+    -r               Check status against remote?
+    -v               Verbose? (for debugging)
+    --hard           Overwrites existing files when popping stash
+    username         IAM username to share the bucket with
+    account_number   AWS account number associated with the IAM user
 
 Options:
-    profile    Named profile to be passed to aws cli
-    region     AWS region for the S3 bucket (default: us-east-1)
+    profile          Named profile to be passed to aws cli
+    region           AWS region for the S3 bucket (default: us-east-1)
 """
-
-
-# Definitions:
-#   push: local file is changed/new
-#   pull: remote file is changed/new
-#   purge: local file has been deleted (remove from master?)
-#   kill: remote file has been deleted (remove from current?)
 
 # Setup
 import os
@@ -68,6 +64,7 @@ def dat():
     elif arg['status']: dat_status(arg['-r'])
     elif arg['overwrite-master']: dat_overwrite_master()
     elif arg['repair-master']: dat_repair_master()
+    elif arg['share']: dat_share(arg['<username>'], arg['<account_number>'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
@@ -726,3 +723,83 @@ def dat_status(remote):
                     print(blue('Deleted locally: \n  ') + '\n  '.join(sorted(purg)))
             else:
                 print(green('Nothing to push; local is clean'))
+
+def dat_share(account_number, username=None, root=False):
+    # Read the bucket name from .dat/config
+    config = read_config()
+    if 'aws' not in config:
+        raise ValueError("Bucket name not found in .dat/config.")
+    bucket_name = config['aws'].split('/')[0]
+
+    # Set up the AWS S3 client
+    s3 = boto3.client('s3')
+
+    # Construct the ARN
+    if root:
+        user_arn = f"arn:aws:iam::{account_number}:root"
+    else:
+        if not username:
+            raise ValueError("Username is required unless specifying root.")
+        user_arn = f"arn:aws:iam::{account_number}:user/{username}"
+
+    # Construct the policy to add
+    new_statement = {
+        "Effect": "Allow",
+        "Principal": {
+            "AWS": user_arn
+        },
+        "Action": [
+            "s3:*"
+        ],
+        "Resource": [
+            f"arn:aws:s3:::{bucket_name}/*"
+        ]
+    }
+
+    list_bucket_statement = {
+        "Effect": "Allow",
+        "Principal": {
+            "AWS": user_arn
+        },
+        "Action": "s3:ListBucket",
+        "Resource": f"arn:aws:s3:::{bucket_name}"
+    }
+
+    try:
+        # Get the current bucket policy
+        current_policy = s3.get_bucket_policy(Bucket=bucket_name)
+        policy = json.loads(current_policy['Policy'])
+    except s3.exceptions.NoSuchBucketPolicy:
+        # No policy exists, create a new one
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": []
+        }
+
+    # Check if the user's ARN is already in the policy
+    existing_statements = [
+        statement for statement in policy['Statement']
+        if statement['Principal']['AWS'] == user_arn
+    ]
+
+    if existing_statements:
+        print(f"User {username if not root else 'root'} already has access to the bucket {bucket_name}.")
+    else:
+        # Add the new statement to the policy
+        policy['Statement'].append(new_statement)
+        policy['Statement'].append(list_bucket_statement)
+
+        # Update the bucket policy
+        s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+        print(f"Access for {username if not root else 'root'} added to the bucket {bucket_name}.")
+
+def read_config(filename='.dat/config'):
+    if not os.path.isfile(filename):
+        sys.exit(red(f'Not a dat repository; {filename} does not exist'))
+
+    config = {}
+    with open(filename, 'r') as f:
+        for line in f:
+            key, value = [x.strip() for x in line.split(':', 1)]
+            config[key] = value
+    return config

@@ -16,7 +16,7 @@ Usage:
     dat [-r] [--region=<region>] status
     dat overwrite-master
     dat repair-master
-    dat share <username> <account_number>
+    dat share <account_number> [<username>] [--root]
 
 Arguments:
     bucket           Name of bucket (ex: my-bucket)
@@ -24,14 +24,16 @@ Arguments:
     -d               Dry run?
     -r               Check status against remote?
     -v               Verbose? (for debugging)
-    --hard           Overwrites existing files when popping stash
-    username         IAM username to share the bucket with
+    username         IAM username to share the bucket with (omit if using --root)
     account_number   AWS account number associated with the IAM user
 
 Options:
     profile          Named profile to be passed to aws cli
     region           AWS region for the S3 bucket (default: us-east-1)
+    --hard           Overwrites existing files when popping stash
+    --root           Share the bucket with the root account (omit <username> when using this)
 """
+
 
 # Setup
 import os

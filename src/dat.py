@@ -773,7 +773,6 @@ def dat_share(account_number, username=None, root=False):
         current_policy = s3.get_bucket_policy(Bucket=bucket_name)
         policy = json.loads(current_policy['Policy'])
     except ClientError as e:
-        # Handle the case where there is no existing bucket policy
         if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
             # No policy exists, create a new one
             policy = {
@@ -797,8 +796,11 @@ def dat_share(account_number, username=None, root=False):
         policy['Statement'].append(list_bucket_statement)
 
         # Update the bucket policy
-        s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
-        print(f"Access for {username if not root else 'root'} added to the bucket {bucket_name}.")
+        try:
+            s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+            print(f"Access for {username if not root else 'root'} added to the bucket {bucket_name}.")
+        except ClientError as e:
+            print(f"Failed to update bucket policy: {e.response['Error']['Message']}")
 
 def read_config(filename='.dat/config'):
     if not os.path.isfile(filename):

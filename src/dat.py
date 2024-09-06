@@ -864,11 +864,15 @@ def export_aws_credentials(profile='default', verbose=False):
         if verbose: print(f"Exporting credentials for profile: {profile}")
         result = subprocess.run(
             ['aws', 'configure', 'export-credentials', '--profile', profile, '--format', 'env'],
-            capture_output=True, text=True, shell=True
+            capture_output=True, text=True
         )
-        if result.returncode == 0:
-            # Execute the output of export-credentials to set environment variables
-            subprocess.run(result.stdout, shell=True)
+        if result.returncode == 0 and result.stdout.strip():
+            # Manually set the environment variables from the command output
+            for line in result.stdout.splitlines():
+                if line.startswith('export'):
+                    key_value = line.split(' ')[1]
+                    key, value = key_value.split('=')
+                    os.environ[key] = value.strip('"')
         else:
             raise Exception(f"Failed to export credentials for profile {profile}: {result.stderr}")
     except Exception as e:

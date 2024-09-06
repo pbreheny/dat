@@ -84,34 +84,35 @@ def blue(x): return '\033[01;38;5;39m' + x + '\033[0m'
 
 def ensure_sso_login(profile):
     """Ensure the user is logged in if using an SSO profile."""
-    if profile and is_sso_profile(profile):
+    if is_sso_profile(profile):
         try:
-            # Run the SSO login command to ensure the session is active
             subprocess.run(f"aws sso login --profile {profile}", shell=True, check=True)
         except subprocess.CalledProcessError:
-            print(red(f"SSO login failed for profile {profile}. Please run 'aws sso login'."))
+            print(f"SSO login failed for profile {profile}. Please run 'aws sso login'.")
             sys.exit(1)
 
 def is_sso_profile(profile):
-    """Check if the given profile is an SSO profile."""
+    """Check if the given profile is an SSO profile by inspecting ~/.aws/config."""
     aws_config = os.path.expanduser("~/.aws/config")
     config = configparser.ConfigParser()
     config.read(aws_config)
     section_name = f'profile {profile}'
     
-    return 'sso_start_url' in config[section_name] if section_name in config else False
+    return ('sso_start_url' in config[section_name]) if section_name in config else False
 
 def get_s3_client(profile=None, region=None):
-    """Returns an S3 client using the correct profile type (SSO or static)."""
-    if profile and is_sso_profile(profile):
-        # Ensure the user is logged in with SSO
-        ensure_sso_login(profile)
-        # Use boto3 with SSO profile
+    """Returns an S3 client using the correct profile type (SSO or static credentials)."""
+    if profile:
+        # Check if the profile is SSO-based, and ensure login if needed
+        if is_sso_profile(profile):
+            ensure_sso_login(profile)
+        
+        # Create session with the profile
         session = boto3.Session(profile_name=profile)
     else:
-        # Use the default boto3 session (CLI v1 or default static credentials)
-        session = boto3.Session(profile_name=profile)
-
+        # Use the default boto3 session with standard credentials
+        session = boto3.Session()
+    
     return session.client('s3', region_name=region or 'us-east-1')
 
 
@@ -184,7 +185,7 @@ def get_master(config, local=None):
         # Try to get master
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
         if 'profile' in config.keys():
-            cmd = cmd + f" --profile {config['profile']}"
+            cmd += f" --profile {config['profile']}"
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
@@ -204,10 +205,11 @@ def get_master(config, local=None):
             master = local.copy()
         else:
             # Something went wrong
-            quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
+            quit('Bucket exists (according to config) but cannot be accessed; are you logged in?')
     else:
-        sys.exit(red('Only AWS pulls are supported in this version'))
+        sys.exit('Only AWS pulls are supported in this version')
     return master
+
 
 
 

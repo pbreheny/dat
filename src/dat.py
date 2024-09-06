@@ -16,7 +16,6 @@ Usage:
     dat overwrite-master
     dat repair-master
     dat share <account_number> [<username>] [--root] [-v]
-    dat export-credentials [-v] [--profile=<profile>]
 
 Arguments:
     bucket           Name of the bucket (ex: my-bucket)
@@ -854,23 +853,3 @@ def read_config(filename='.dat/config'):
             key, value = [x.strip() for x in line.split(':', 1)]
             config[key] = value
     return config
-
-def export_aws_credentials(profile, verbose=False):
-    """Export AWS credentials using AWS CLI v2 for SSO login by directly evaluating the export-credentials command."""
-    try:
-        if verbose: 
-            print(f"Exporting credentials for profile: {profile}")
-        
-        # Build the command string to be evaluated
-        cmd = f'eval "$(aws configure export-credentials --profile {profile} --format env)"'
-        
-        # Run the command using a shell
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            raise Exception(f"Failed to export credentials for profile {profile}: {result.stderr}")
-        else:
-            if verbose:
-                print(f"Credentials exported successfully for profile: {profile}")
-    except Exception as e:
-        print(f"Error exporting AWS credentials: {e}")

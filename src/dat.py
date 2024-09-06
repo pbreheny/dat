@@ -52,6 +52,7 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
+    profile = arg.get('--profile', 'default')
     
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkin']: dat_checkin(arg['<file>'])
@@ -75,7 +76,7 @@ def dat():
             root=arg['--root'],
             verbose=arg['-v']
         )
-    elif arg['export-credentials']: export_aws_credentials(arg.get('--profile', 'default'), arg['-v'])
+    elif arg['export-credentials']: export_aws_credentials(profile, arg['-v'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'

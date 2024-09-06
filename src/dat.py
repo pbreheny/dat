@@ -863,16 +863,19 @@ def export_aws_credentials(profile, verbose=False):
             ['aws', 'configure', 'export-credentials', '--profile', profile, '--format', 'env'],
             capture_output=True, text=True
         )
-        print(result)
+        
         if result.returncode == 0 and result.stdout.strip():
             # Manually set the environment variables from the command output
             for line in result.stdout.splitlines():
+                print(line)
                 # Only process lines that contain 'export' and '='
                 if line.startswith('export') and '=' in line:
+                    
                     try:
                         key_value = line.split(' ')[1]
                         key, value = key_value.split('=', 1)  # Split only once in case value contains '='
                         os.environ[key] = value.strip('"')
+                        print(os.environ[key])
                     except ValueError:
                         print(f"Skipping invalid line: {line}")
         else:

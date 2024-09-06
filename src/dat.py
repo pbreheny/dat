@@ -175,6 +175,7 @@ def get_master(config, local=None):
         elif config.get('pushed', 'False') == 'False':
             # Region is only checked if we are about to create the bucket
             region = get_aws_region(bucket_name)
+            print(f"Region found: {region}")
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
             

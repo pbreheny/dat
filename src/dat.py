@@ -493,10 +493,6 @@ def dat_push(dry=False, verbose=False):
     if verbose: print('Reading config')
     config = read_config()
 
-    # Set the region: check AWS CLI, then default to 'us-east-1'
-    aws_region = get_aws_region()
-    config['region'] = aws_region if aws_region else 'us-east-1'
-
     # Get current/local
     if verbose: print('Taking inventory')
     current = take_inventory(config)
@@ -531,7 +527,7 @@ def dat_push(dry=False, verbose=False):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
         if 'profile' in config.keys():
             opt = opt + f" --profile {config['profile']}"
-        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {config['region']}"
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {get_aws_region()}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))
@@ -861,3 +857,19 @@ def read_config(filename='.dat/config'):
             key, value = [x.strip() for x in line.split(':', 1)]
             config[key] = value
     return config
+
+def export_aws_credentials(profile='default', verbose=False):
+    """Export AWS credentials using AWS CLI v2 for SSO login."""
+    try:
+        if verbose: print(f"Exporting credentials for profile: {profile}")
+        result = subprocess.run(
+            ['aws', 'configure', 'export-credentials', '--profile', profile, '--format', 'env'],
+            capture_output=True, text=True, shell=True
+        )
+        if result.returncode == 0:
+            # Execute the output of export-credentials to set environment variables
+            subprocess.run(result.stdout, shell=True)
+        else:
+            raise Exception(f"Failed to export credentials for profile {profile}: {result.stderr}")
+    except Exception as e:
+        print(f"Error exporting AWS credentials: {e}")

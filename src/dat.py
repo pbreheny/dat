@@ -75,7 +75,7 @@ def dat():
             root=arg['--root'],
             verbose=arg['-v']
         )
-    elif arg['export-credentials']: export_aws_credentials(arg['--profile'], arg['-v'])
+    elif arg['export-credentials']: export_aws_credentials(arguments.get('--profile', 'default'), arg['-v'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
@@ -869,10 +869,14 @@ def export_aws_credentials(profile='default', verbose=False):
         if result.returncode == 0 and result.stdout.strip():
             # Manually set the environment variables from the command output
             for line in result.stdout.splitlines():
-                if line.startswith('export'):
-                    key_value = line.split(' ')[1]
-                    key, value = key_value.split('=')
-                    os.environ[key] = value.strip('"')
+                # Only process lines that contain 'export' and '='
+                if line.startswith('export') and '=' in line:
+                    try:
+                        key_value = line.split(' ')[1]
+                        key, value = key_value.split('=', 1)  # Split only once in case value contains '='
+                        os.environ[key] = value.strip('"')
+                    except ValueError:
+                        print(f"Skipping invalid line: {line}")
         else:
             raise Exception(f"Failed to export credentials for profile {profile}: {result.stderr}")
     except Exception as e:

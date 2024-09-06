@@ -1,6 +1,6 @@
 [project]
 name = "dat"
-version = "1.7.15"
+version = "1.7.16"
 dependencies = [
     "boto3",
     "docopt",

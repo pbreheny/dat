@@ -28,7 +28,6 @@ Options:
     -d                       Dry run?
     -r                       Check status against remote?
     -v                       Verbose? (for debugging)
-    --region=<region>        AWS region for the S3 bucket [default: us-east-1]
     --profile=<profile>      AWS CLI profile to use
     --hard                   Overwrite existing files when popping stash
     --root                   Share the bucket with the root account (omit <username> when using this)
@@ -175,7 +174,6 @@ def get_master(config, local=None):
     else:
         sys.exit(red('Only aws pulls are supported in this version'))
     return master
-
 
 def needs_push(current, local):
     push = set()
@@ -476,6 +474,14 @@ def dat_overwrite_master():
     except:
         quit(red('Failed to push file; are you logged in?'))
 
+def bucket_exists(bucket_name):
+    """Check if the S3 bucket exists."""
+    try:
+        subprocess.check_output(f"aws s3api head-bucket --bucket {bucket_name}", shell=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
 def get_aws_region():
     """Get the AWS region by running the AWS CLI command."""
     try:
@@ -527,7 +533,19 @@ def dat_push(dry=False, verbose=False):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
         if 'profile' in config.keys():
             opt = opt + f" --profile {config['profile']}"
-        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {get_aws_region()}"
+
+        # Check if bucket exists and handle region accordingly
+        bucket_name = config['aws']
+        if bucket_exists(bucket_name):
+            if verbose: print(f"Bucket {bucket_name} exists, no need to specify region")
+            region_option = ""
+        else:
+            if verbose: print(f"Bucket {bucket_name} not found, attempting to get region")
+            region = get_aws_region(bucket_name)
+            region_option = f" --region {region}" if region else ""
+
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{bucket_name} {opt}{region_option}"
+        
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))

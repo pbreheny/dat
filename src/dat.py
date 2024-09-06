@@ -46,9 +46,8 @@ import platform
 import subprocess
 import textwrap
 from glob import glob
-from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
+from botocore.exceptions import ClientError
 from docopt import docopt
-import configparser
 
 def dat():
     arg = docopt(__doc__)
@@ -81,58 +80,6 @@ def dat():
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
 def green(x): return '\033[01;38;5;46m' + x + '\033[0m'
 def blue(x): return '\033[01;38;5;39m' + x + '\033[0m'
-
-def ensure_sso_login(profile):
-    """Ensure the user is logged in if using an SSO profile."""
-    if is_sso_profile(profile):
-        try:
-            subprocess.run(f"aws sso login --profile {profile}", shell=True, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"SSO login failed for profile {profile}: {str(e)}. Please run 'aws sso login'.")
-            sys.exit(1)
-
-def is_sso_profile(profile):
-    """Check if the given profile is an SSO profile by inspecting ~/.aws/config."""
-    aws_config = os.path.expanduser("~/.aws/config")
-    config = configparser.ConfigParser()
-    config.read(aws_config)
-    section_name = f'profile {profile}'
-    
-    return ('sso_start_url' in config[section_name]) if section_name in config else False
-
-def get_s3_client(profile=None, region=None):
-    """Returns an S3 client using the correct profile type (SSO or static credentials)."""
-    try:
-        if profile:
-            # Check if the profile is SSO-based, and ensure login if needed
-            if is_sso_profile(profile):
-                ensure_sso_login(profile)
-
-            # Create session with the profile
-            session = boto3.Session(profile_name=profile)
-        else:
-            # Use the default boto3 session with standard credentials
-            session = boto3.Session()
-
-        # Verify credentials are loaded
-        credentials = session.get_credentials()
-        if credentials:
-            frozen_credentials = credentials.get_frozen_credentials()
-            print(f"Using AWS Access Key: {frozen_credentials.access_key}")
-        else:
-            raise NoCredentialsError()
-
-        return session.client('s3', region_name=region or 'us-east-1')
-
-    except NoCredentialsError:
-        print("No credentials found. Please ensure you're logged in using 'aws sso login'.")
-        sys.exit(1)
-    except PartialCredentialsError:
-        print("Incomplete credentials found. Please check your AWS SSO configuration.")
-        sys.exit(1)
-
-
-
 
 def md5(fname):
     hash_md5 = hashlib.md5()
@@ -198,40 +145,36 @@ def write_config(config, filename='.dat/config'):
 
 def get_master(config, local=None):
     if 'aws' in config.keys():
+
         # Try to get master
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
         if 'profile' in config.keys():
-            cmd += f" --profile {config['profile']}"
+            cmd = cmd + f" --profile {config['profile']}"
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
-            # Download successful
+            # download successful
             master = read_inventory('.dat/master')
             os.remove('.dat/master')
         elif config['pushed'] == 'False':
-            # Create bucket
-            s3 = get_s3_client(profile=config.get('profile'), region=config.get('region', 'us-east-1'))
+            # create bucket
+            if 'profile' in config.keys():
+                boto3.setup_default_session(profile_name=config['profile'])
+            s3 = boto3.client('s3', region_name=config.get('region', 'us-east-1'))
             bucket = config['aws'].split('/')[0]
-            try:
-                s3.create_bucket(
-                    Bucket=bucket,
-                    CreateBucketConfiguration={
-                        'LocationConstraint': config.get('region', 'us-east-1')
-                    }
-                )
-                master = local.copy()
-            except NoCredentialsError as e:
-                print(f"Failed to create bucket: {str(e)}")
-                sys.exit(1)
+            s3.create_bucket(
+                Bucket=bucket,
+                CreateBucketConfiguration={
+                    'LocationConstraint': config.get('region', 'us-east-1')
+                }
+            )
+            master = local.copy()
         else:
-            # Something went wrong
-            quit('Bucket exists (according to config) but cannot be accessed; are you logged in?')
+            # something went wrong
+            quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
-        sys.exit('Only AWS pulls are supported in this version')
+        sys.exit(red('Only aws pulls are supported in this version'))
     return master
-
-
-
 
 
 def needs_push(current, local):
@@ -546,7 +489,7 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
-    # Create push, purge lists
+    # Create push, purg lists
     if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)
@@ -558,8 +501,13 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
         if verbose: print('Obtaining master')
         master = get_master(config, local)
 
-    # Ensure SSO login if necessary
-    ensure_sso_login(config.get('profile'))
+    # Check for conflicts
+    if verbose: print('Checking for conflicts')
+    [push_conflict, push_resolved] = resolve_push_conflicts(current, local, master, push)
+    [purg_conflict, purg_resolved] = resolve_purge_conflicts(master, local, purg)
+    conflict = sorted(push_conflict | purg_conflict)
+    if len(conflict) > 0:
+        print(red("Unable to push the following files: conflict with master\n" + '\n'.join(conflict)))
 
     # Sync
     if verbose: print('Pushing')
@@ -568,9 +516,9 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
         opt = '--delete --exclude "*" --include .dat/master'
         for f in sorted((push | purg) - push_conflict - purg_conflict - push_resolved - purg_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {config['region']}"
         if 'profile' in config.keys():
-            cmd = cmd + f" --profile {config['profile']}"
+            opt = opt + f" --profile {config['profile']}"
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {config['region']}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))
@@ -579,6 +527,14 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
             os.system(cmd)
             write_inventory(local, '.dat/local')
             os.remove('.dat/master')
+    elif len(conflict) == 0:
+        if not dry: write_inventory(local, '.dat/local')
+        exit('Everything up-to-date')
+
+    # Remove never pushed tag, if present
+    if not dry:
+        config['pushed'] = 'True'
+        write_config(config)
 
 def dat_pull(dry=False, verbose=False, region='us-east-1'):
     # Read in config file

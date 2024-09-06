@@ -143,37 +143,61 @@ def write_config(config, filename='.dat/config'):
         config_file.write(f"{k}: {config[k]}\n")
     config_file.close()
 
+def get_aws_region():
+    """Get the AWS region by running the AWS CLI command."""
+    try:
+        result = subprocess.run(['aws', 'configure', 'get', 'region'], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        else:
+            return None
+    except Exception as e:
+        print(f"Error retrieving AWS region: {e}")
+        return None
+
 def get_master(config, local=None):
     if 'aws' in config.keys():
+        bucket_name = config['aws'].split('/')[0]  # Extract the bucket name
 
-        # Try to get master
-        cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
+        # Try to get the master file
         if 'profile' in config.keys():
-            cmd = cmd + f" --profile {config['profile']}"
+            profile_option = f" --profile {config['profile']}"
+        else:
+            profile_option = ""
+
+        cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master{profile_option}"
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
-            # download successful
+            # Download successful
             master = read_inventory('.dat/master')
             os.remove('.dat/master')
-        elif config['pushed'] == 'False':
-            # create bucket
+        elif config.get('pushed', 'False') == 'False':
+            # Region is only checked if we are about to create the bucket
+            region = get_aws_region(bucket_name)
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
-            s3 = boto3.client('s3', region_name=config.get('region', 'us-east-1'))
-            bucket = config['aws'].split('/')[0]
-            s3.create_bucket(
-                Bucket=bucket,
-                CreateBucketConfiguration={
-                    'LocationConstraint': config.get('region', 'us-east-1')
-                }
-            )
+            
+            s3 = boto3.client('s3')
+
+            # Create bucket
+            if region:
+                s3.create_bucket(
+                    Bucket=bucket_name,
+                    CreateBucketConfiguration={
+                        'LocationConstraint': region
+                    }
+                )
+            else:
+                s3.create_bucket(Bucket=bucket_name)
+
             master = local.copy()
         else:
-            # something went wrong
+            # Something went wrong: the bucket exists but the master file cannot be accessed
             quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
-        sys.exit(red('Only aws pulls are supported in this version'))
+        sys.exit(red('Only AWS pulls are supported in this version'))
+
     return master
 
 def needs_push(current, local):
@@ -475,27 +499,8 @@ def dat_overwrite_master():
     except:
         quit(red('Failed to push file; are you logged in?'))
 
-def bucket_exists(bucket_name):
-    """Check if the S3 bucket exists."""
-    try:
-        subprocess.check_output(f"aws s3api head-bucket --bucket {bucket_name}", shell=True)
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-def get_aws_region():
-    """Get the AWS region by running the AWS CLI command."""
-    try:
-        result = subprocess.run(['aws', 'configure', 'get', 'region'], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        else:
-            return None
-    except Exception as e:
-        print(f"Error retrieving AWS region: {e}")
-        return None
-
 def dat_push(dry=False, verbose=False):
+
     # Read in config file
     if verbose: print('Reading config')
     config = read_config()
@@ -505,7 +510,7 @@ def dat_push(dry=False, verbose=False):
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
-    # Create push, purge lists
+    # Create push, purg lists
     if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)
@@ -534,19 +539,7 @@ def dat_push(dry=False, verbose=False):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
         if 'profile' in config.keys():
             opt = opt + f" --profile {config['profile']}"
-
-        # Check if bucket exists and handle region accordingly
-        bucket_name = config['aws']
-        if bucket_exists(bucket_name):
-            if verbose: print(f"Bucket {bucket_name} exists, no need to specify region")
-            region_option = ""
-        else:
-            if verbose: print(f"Bucket {bucket_name} not found, attempting to get region")
-            region = get_aws_region(bucket_name)
-            region_option = f" --region {region}" if region else ""
-
-        cmd = f"aws s3 sync --no-follow-symlinks . s3://{bucket_name} {opt}{region_option}"
-        
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))

@@ -52,7 +52,7 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
-    profile = arg.get('--profile', 'default')
+    profile = arg['--profile'] or 'default'
     
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkin']: dat_checkin(arg['<file>'])
@@ -859,7 +859,7 @@ def read_config(filename='.dat/config'):
             config[key] = value
     return config
 
-def export_aws_credentials(profile='default', verbose=False):
+def export_aws_credentials(profile, verbose=False):
     """Export AWS credentials using AWS CLI v2 for SSO login."""
     try:
         if verbose: print(f"Exporting credentials for profile: {profile}")

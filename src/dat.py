@@ -743,10 +743,6 @@ def dat_status(remote):
             else:
                 print(green('Nothing to push; local is clean'))
 
-import boto3
-import json
-from botocore.exceptions import ClientError
-
 def dat_share(account_number, username=None, root=False, verbose=False):
     """
     Shares the S3 bucket with another AWS account or IAM user.
@@ -847,7 +843,6 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         print(f"Error applying bucket policy: {e.response['Error']['Message']}")
         if verbose:
             print(f"[DEBUG] Failed to update bucket policy due to error code: {e.response['Error']['Code']}")
-
 
 def read_config(filename='.dat/config'):
     if not os.path.isfile(filename):

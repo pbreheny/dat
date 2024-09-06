@@ -8,7 +8,7 @@ Usage:
     dat checkout <file>
     dat clone [--profile=<profile>] <bucket> [<folder>]
     dat delete
-    dat [-d] [-v] [--region=<region>] pull
+    dat [-d] [-v] pull
     dat [-d] [-v] [--region=<region>] push
     dat stash
     dat stash pop [--hard]
@@ -58,7 +58,7 @@ def dat():
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'])
     elif arg['delete']: dat_delete()
     elif arg['push']: dat_push(arg['-d'], arg['-v'], arg['--region'])
-    elif arg['pull']: dat_pull(arg['-d'], arg['-v'], arg['--region'])
+    elif arg['pull']: dat_pull(arg['-d'], arg['-v'])
     elif arg['stash']:
         if arg['pop']:
             dat_pop(arg['--hard'])
@@ -535,13 +535,11 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
         config['pushed'] = 'True'
         write_config(config)
 
-def dat_pull(dry=False, verbose=False, region='us-east-1'):
+def dat_pull(dry=False, verbose=False):
+
     # Read in config file
     if verbose: print('Reading config')
     config = read_config()
-
-    # Set the region
-    config['region'] = region if region else config.get('region', 'us-east-1')
 
     # Get master/current/local
     if verbose: print('Taking inventory')
@@ -570,7 +568,7 @@ def dat_pull(dry=False, verbose=False, region='us-east-1'):
         opt = '--delete --exclude "*"'
         for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        cmd = f"aws s3 sync s3://{config['aws']} . {opt} --region {config['region']}"
+        cmd = f"aws s3 sync s3://{config['aws']} . {opt}"
         if 'profile' in config.keys():
             cmd = cmd + f" --profile {config['profile']}"
         if dry:

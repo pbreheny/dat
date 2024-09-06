@@ -9,7 +9,7 @@ Usage:
     dat clone [--profile=<profile>] <bucket> [<folder>]
     dat delete
     dat [-d] [-v] pull
-    dat [-d] [-v] [--region=<region>] push
+    dat [-d] [-v] push
     dat stash
     dat stash pop [--hard]
     dat [-r] status
@@ -57,7 +57,7 @@ def dat():
     elif arg['checkout']: dat_checkout(arg['<file>'])
     elif arg['clone']: dat_clone(arg['<bucket>'], arg['<folder>'], arg['--profile'])
     elif arg['delete']: dat_delete()
-    elif arg['push']: dat_push(arg['-d'], arg['-v'], arg['--region'])
+    elif arg['push']: dat_push(arg['-d'], arg['-v'])
     elif arg['pull']: dat_pull(arg['-d'], arg['-v'])
     elif arg['stash']:
         if arg['pop']:

@@ -475,20 +475,33 @@ def dat_overwrite_master():
     except:
         quit(red('Failed to push file; are you logged in?'))
 
-def dat_push(dry=False, verbose=False, region='us-east-1'):
+def get_aws_region():
+    """Get the AWS region by running the AWS CLI command."""
+    try:
+        result = subprocess.run(['aws', 'configure', 'get', 'region'], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        else:
+            return None
+    except Exception as e:
+        print(f"Error retrieving AWS region: {e}")
+        return None
+
+def dat_push(dry=False, verbose=False):
     # Read in config file
     if verbose: print('Reading config')
     config = read_config()
 
-    # Set the region
-    config['region'] = region if region else config.get('region', 'us-east-1')
+    # Set the region: check AWS CLI, then default to 'us-east-1'
+    aws_region = get_aws_region()
+    config['region'] = aws_region if aws_region else 'us-east-1'
 
     # Get current/local
     if verbose: print('Taking inventory')
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
-    # Create push, purg lists
+    # Create push, purge lists
     if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)

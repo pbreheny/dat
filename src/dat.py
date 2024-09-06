@@ -48,6 +48,7 @@ import textwrap
 from glob import glob
 from botocore.exceptions import ClientError
 from docopt import docopt
+import configparser
 
 def dat():
     arg = docopt(__doc__)
@@ -80,6 +81,35 @@ def dat():
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
 def green(x): return '\033[01;38;5;46m' + x + '\033[0m'
 def blue(x): return '\033[01;38;5;39m' + x + '\033[0m'
+
+def is_sso_profile(profile):
+    """Check if the given profile is an SSO profile."""
+    aws_config = os.path.expanduser("~/.aws/config")
+    config = configparser.ConfigParser()
+    config.read(aws_config)
+    section_name = f'profile {profile}'
+    
+    return 'sso_start_url' in config[section_name] if section_name in config else False
+
+def get_s3_client(profile=None, region=None):
+    """Returns an S3 client using the correct profile type (SSO or static)."""
+    if profile and is_sso_profile(profile):
+        # Ensure that the user is logged in to SSO
+        try:
+            subprocess.run(f"aws sso login --profile {profile}", shell=True, check=True)
+        except subprocess.CalledProcessError:
+            print(red(f"SSO login failed for profile {profile}. Please run 'aws sso login'."))
+            sys.exit(1)
+
+        # Use boto3 with SSO profile
+        session = boto3.Session(profile_name=profile)
+    else:
+        # Use the default boto3 session (CLI v1 or default static credentials)
+        session = boto3.Session(profile_name=profile)
+
+    return session.client('s3', region_name=region or 'us-east-1')
+
+
 
 def md5(fname):
     hash_md5 = hashlib.md5()
@@ -144,7 +174,6 @@ def write_config(config, filename='.dat/config'):
 
 def get_master(config, local=None):
     if 'aws' in config.keys():
-
         # Try to get master
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
         if 'profile' in config.keys():
@@ -152,14 +181,12 @@ def get_master(config, local=None):
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
-            # download successful
+            # Download successful
             master = read_inventory('.dat/master')
             os.remove('.dat/master')
         elif config['pushed'] == 'False':
-            # create bucket
-            if 'profile' in config.keys():
-                boto3.setup_default_session(profile_name=config['profile'])
-            s3 = boto3.client('s3', region_name=config.get('region', 'us-east-1'))
+            # Create bucket
+            s3 = get_s3_client(profile=config.get('profile'), region=config.get('region', 'us-east-1'))
             bucket = config['aws'].split('/')[0]
             s3.create_bucket(
                 Bucket=bucket,
@@ -169,11 +196,12 @@ def get_master(config, local=None):
             )
             master = local.copy()
         else:
-            # something went wrong
+            # Something went wrong
             quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
-        sys.exit(red('Only aws pulls are supported in this version'))
+        sys.exit(red('Only AWS pulls are supported in this version'))
     return master
+
 
 
 def needs_push(current, local):
@@ -488,7 +516,7 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
-    # Create push, purg lists
+    # Create push, purge lists
     if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)
@@ -500,14 +528,6 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
         if verbose: print('Obtaining master')
         master = get_master(config, local)
 
-    # Check for conflicts
-    if verbose: print('Checking for conflicts')
-    [push_conflict, push_resolved] = resolve_push_conflicts(current, local, master, push)
-    [purg_conflict, purg_resolved] = resolve_purge_conflicts(master, local, purg)
-    conflict = sorted(push_conflict | purg_conflict)
-    if len(conflict) > 0:
-        print(red("Unable to push the following files: conflict with master\n" + '\n'.join(conflict)))
-
     # Sync
     if verbose: print('Pushing')
     resolved = sorted(push_resolved | purg_resolved)
@@ -515,9 +535,9 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
         opt = '--delete --exclude "*" --include .dat/master'
         for f in sorted((push | purg) - push_conflict - purg_conflict - push_resolved - purg_resolved):
             opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        if 'profile' in config.keys():
-            opt = opt + f" --profile {config['profile']}"
         cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} {opt} --region {config['region']}"
+        if 'profile' in config.keys():
+            cmd = cmd + f" --profile {config['profile']}"
         if dry:
             print(cmd)
             print('Resolved: ' + str(resolved))
@@ -526,14 +546,7 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
             os.system(cmd)
             write_inventory(local, '.dat/local')
             os.remove('.dat/master')
-    elif len(conflict) == 0:
-        if not dry: write_inventory(local, '.dat/local')
-        exit('Everything up-to-date')
 
-    # Remove never pushed tag, if present
-    if not dry:
-        config['pushed'] = 'True'
-        write_config(config)
 
 def dat_pull(dry=False, verbose=False, region='us-east-1'):
     # Read in config file

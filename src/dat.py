@@ -174,6 +174,7 @@ def get_master(config, local=None):
             os.remove('.dat/master')
         elif config.get('pushed', 'False') == 'False':
             # Region is only checked if we are about to create the bucket
+            print("Getting region")
             region = get_aws_region(bucket_name)
             print(f"Region found: {region}")
             if 'profile' in config.keys():

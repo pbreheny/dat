@@ -46,7 +46,7 @@ import platform
 import subprocess
 import textwrap
 from glob import glob
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 from docopt import docopt
 import configparser
 
@@ -87,8 +87,8 @@ def ensure_sso_login(profile):
     if is_sso_profile(profile):
         try:
             subprocess.run(f"aws sso login --profile {profile}", shell=True, check=True)
-        except subprocess.CalledProcessError:
-            print(f"SSO login failed for profile {profile}. Please run 'aws sso login'.")
+        except subprocess.CalledProcessError as e:
+            print(f"SSO login failed for profile {profile}: {str(e)}. Please run 'aws sso login'.")
             sys.exit(1)
 
 def is_sso_profile(profile):
@@ -102,18 +102,34 @@ def is_sso_profile(profile):
 
 def get_s3_client(profile=None, region=None):
     """Returns an S3 client using the correct profile type (SSO or static credentials)."""
-    if profile:
-        # Check if the profile is SSO-based, and ensure login if needed
-        if is_sso_profile(profile):
-            ensure_sso_login(profile)
-        
-        # Create session with the profile
-        session = boto3.Session(profile_name=profile)
-    else:
-        # Use the default boto3 session with standard credentials
-        session = boto3.Session()
-    
-    return session.client('s3', region_name=region or 'us-east-1')
+    try:
+        if profile:
+            # Check if the profile is SSO-based, and ensure login if needed
+            if is_sso_profile(profile):
+                ensure_sso_login(profile)
+
+            # Create session with the profile
+            session = boto3.Session(profile_name=profile)
+        else:
+            # Use the default boto3 session with standard credentials
+            session = boto3.Session()
+
+        # Verify credentials are loaded
+        credentials = session.get_credentials()
+        if credentials:
+            frozen_credentials = credentials.get_frozen_credentials()
+            print(f"Using AWS Access Key: {frozen_credentials.access_key}")
+        else:
+            raise NoCredentialsError()
+
+        return session.client('s3', region_name=region or 'us-east-1')
+
+    except NoCredentialsError:
+        print("No credentials found. Please ensure you're logged in using 'aws sso login'.")
+        sys.exit(1)
+    except PartialCredentialsError:
+        print("Incomplete credentials found. Please check your AWS SSO configuration.")
+        sys.exit(1)
 
 
 
@@ -195,19 +211,24 @@ def get_master(config, local=None):
             # Create bucket
             s3 = get_s3_client(profile=config.get('profile'), region=config.get('region', 'us-east-1'))
             bucket = config['aws'].split('/')[0]
-            s3.create_bucket(
-                Bucket=bucket,
-                CreateBucketConfiguration={
-                    'LocationConstraint': config.get('region', 'us-east-1')
-                }
-            )
-            master = local.copy()
+            try:
+                s3.create_bucket(
+                    Bucket=bucket,
+                    CreateBucketConfiguration={
+                        'LocationConstraint': config.get('region', 'us-east-1')
+                    }
+                )
+                master = local.copy()
+            except NoCredentialsError as e:
+                print(f"Failed to create bucket: {str(e)}")
+                sys.exit(1)
         else:
             # Something went wrong
             quit('Bucket exists (according to config) but cannot be accessed; are you logged in?')
     else:
         sys.exit('Only AWS pulls are supported in this version')
     return master
+
 
 
 

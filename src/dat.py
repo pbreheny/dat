@@ -82,6 +82,16 @@ def red(x): return '\033[01;38;5;196m' + x + '\033[0m'
 def green(x): return '\033[01;38;5;46m' + x + '\033[0m'
 def blue(x): return '\033[01;38;5;39m' + x + '\033[0m'
 
+def ensure_sso_login(profile):
+    """Ensure the user is logged in if using an SSO profile."""
+    if profile and is_sso_profile(profile):
+        try:
+            # Run the SSO login command to ensure the session is active
+            subprocess.run(f"aws sso login --profile {profile}", shell=True, check=True)
+        except subprocess.CalledProcessError:
+            print(red(f"SSO login failed for profile {profile}. Please run 'aws sso login'."))
+            sys.exit(1)
+
 def is_sso_profile(profile):
     """Check if the given profile is an SSO profile."""
     aws_config = os.path.expanduser("~/.aws/config")
@@ -94,13 +104,8 @@ def is_sso_profile(profile):
 def get_s3_client(profile=None, region=None):
     """Returns an S3 client using the correct profile type (SSO or static)."""
     if profile and is_sso_profile(profile):
-        # Ensure that the user is logged in to SSO
-        try:
-            subprocess.run(f"aws sso login --profile {profile}", shell=True, check=True)
-        except subprocess.CalledProcessError:
-            print(red(f"SSO login failed for profile {profile}. Please run 'aws sso login'."))
-            sys.exit(1)
-
+        # Ensure the user is logged in with SSO
+        ensure_sso_login(profile)
         # Use boto3 with SSO profile
         session = boto3.Session(profile_name=profile)
     else:
@@ -108,6 +113,7 @@ def get_s3_client(profile=None, region=None):
         session = boto3.Session(profile_name=profile)
 
     return session.client('s3', region_name=region or 'us-east-1')
+
 
 
 
@@ -528,6 +534,9 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
         if verbose: print('Obtaining master')
         master = get_master(config, local)
 
+    # Ensure SSO login if necessary
+    ensure_sso_login(config.get('profile'))
+
     # Sync
     if verbose: print('Pushing')
     resolved = sorted(push_resolved | purg_resolved)
@@ -546,7 +555,6 @@ def dat_push(dry=False, verbose=False, region='us-east-1'):
             os.system(cmd)
             write_inventory(local, '.dat/local')
             os.remove('.dat/master')
-
 
 def dat_pull(dry=False, verbose=False, region='us-east-1'):
     # Read in config file

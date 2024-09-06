@@ -180,9 +180,10 @@ def get_master(config, local=None):
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
             
+            s3 = boto3.client('s3')
+
             # Create bucket
             if region:
-                s3 = boto3.client('s3', region_name=region)
                 s3.create_bucket(
                     Bucket=bucket_name,
                     CreateBucketConfiguration={

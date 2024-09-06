@@ -16,6 +16,7 @@ Usage:
     dat overwrite-master
     dat repair-master
     dat share <account_number> [<username>] [--root] [-v]
+    dat export-credentials [-v] [--profile=<profile>]
 
 Arguments:
     bucket           Name of the bucket (ex: my-bucket)
@@ -74,7 +75,7 @@ def dat():
             root=arg['--root'],
             verbose=arg['-v']
         )
-
+    elif arg['export-credentials']: export_aws_credentials(arg['--profile'], arg['-v'])
 
 # ANSI escape sequences
 def red(x): return '\033[01;38;5;196m' + x + '\033[0m'

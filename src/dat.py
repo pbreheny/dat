@@ -165,7 +165,6 @@ def get_master(config, local=None):
             region = get_aws_region()
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
-            
             s3 = boto3.client('s3')
 
             # create bucket

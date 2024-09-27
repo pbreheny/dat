@@ -154,8 +154,6 @@ def get_master(config, local=None):
         # Try to get master
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
         if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
-
-        cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master{profile_option}"
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):

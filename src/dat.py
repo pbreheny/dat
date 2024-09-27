@@ -151,11 +151,9 @@ def write_config(config, filename='.dat/config'):
 def get_master(config, local=None):
     if 'aws' in config.keys():
 
-        # Try to get the master file
-        if 'profile' in config.keys():
-            profile_option = f" --profile {config['profile']}"
-        else:
-            profile_option = ""
+        # Try to get master
+        cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
+        if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
 
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master{profile_option}"
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -190,7 +188,6 @@ def get_master(config, local=None):
             quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
         sys.exit(red('Only aws pulls are supported in this version'))
-
     return master
 
 def needs_push(current, local):

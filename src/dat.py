@@ -33,6 +33,12 @@ Options:
     --root                   Share the bucket with the root account (omit <username> when using this)
 """
 
+# Definitions:
+#   push: local file is changed/new
+#   pull: remote file is changed/new
+#   purge: local file has been deleted (remove from master?)
+#   kill: remote file has been deleted (remove from current?)
+
 # Setup
 import os
 import re
@@ -51,7 +57,6 @@ from docopt import docopt
 def dat():
     arg = docopt(__doc__)
     profile = arg['--profile'] or 'default'
-    
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkin']: dat_checkin(arg['<file>'])
     elif arg['checkout']: dat_checkout(arg['<file>'])
@@ -864,3 +869,23 @@ def read_config(filename='.dat/config'):
             key, value = [x.strip() for x in line.split(':', 1)]
             config[key] = value
     return config
+
+def export_aws_credentials(profile, verbose=False):
+    """Export AWS credentials using AWS CLI v2 for SSO login by directly evaluating the export-credentials command."""
+    try:
+        if verbose: 
+            print(f"Exporting credentials for profile: {profile}")
+        
+        # Build the command string to be evaluated
+        cmd = f'eval "$(aws configure export-credentials --profile {profile} --format env)"'
+        
+        # Run the command using a shell
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            raise Exception(f"Failed to export credentials for profile {profile}: {result.stderr}")
+        else:
+            if verbose:
+                print(f"Credentials exported successfully for profile: {profile}")
+    except Exception as e:
+        print(f"Error exporting AWS credentials: {e}")

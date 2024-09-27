@@ -16,6 +16,7 @@ Usage:
     dat overwrite-master
     dat repair-master
     dat share <account_number> [<username>] [--root] [-v]
+    dat export-credentials [-v] [--profile=<profile>]
 
 Arguments:
     bucket           Name of the bucket (ex: my-bucket)
@@ -28,6 +29,7 @@ Options:
     -d                       Dry run?
     -r                       Check status against remote?
     -v                       Verbose? (for debugging)
+    --region=<region>        AWS region for the S3 bucket [default: us-east-1]
     --profile=<profile>      AWS CLI profile to use
     --hard                   Overwrite existing files when popping stash
     --root                   Share the bucket with the root account (omit <username> when using this)
@@ -198,7 +200,7 @@ def get_master(config, local=None):
 
             master = local.copy()
         else:
-            # Something went wrong: the bucket exists but the master file cannot be accessed
+            # something went wrong
             quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
         sys.exit(red('Only AWS pulls are supported in this version'))
@@ -858,6 +860,18 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         print(f"Error applying bucket policy: {e.response['Error']['Message']}")
         if verbose:
             print(f"[DEBUG] Failed to update bucket policy due to error code: {e.response['Error']['Code']}")
+
+def get_aws_region():
+    """Get the AWS region by running the AWS CLI command."""
+    try:
+        result = subprocess.run(['aws', 'configure', 'get', 'region'], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        else:
+            return None
+    except Exception as e:
+        print(f"Error retrieving AWS region: {e}")
+        return None
 
 def read_config(filename='.dat/config'):
     if not os.path.isfile(filename):

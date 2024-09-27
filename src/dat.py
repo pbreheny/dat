@@ -151,7 +151,6 @@ def write_config(config, filename='.dat/config'):
 
 def get_master(config, local=None):
     if 'aws' in config.keys():
-        bucket_name = config['aws'].split('/')[0]  # Extract the bucket name
 
         # Try to get the master file
         if 'profile' in config.keys():
@@ -163,34 +162,35 @@ def get_master(config, local=None):
         a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
-            # Download successful
+            # download successful
             master = read_inventory('.dat/master')
             os.remove('.dat/master')
-        elif config.get('pushed', 'False') == 'False':
-            # Region is only checked if we are about to create the bucket
+        elif config['pushed'] == 'False':
+            # create bucket
             region = get_aws_region()
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
             
             s3 = boto3.client('s3')
 
-            # Create bucket
+            # create bucket
+            bucket = config['aws'].split('/')[0]
             if region:
                 s3.create_bucket(
-                    Bucket=bucket_name,
+                    Bucket=bucket,
                     CreateBucketConfiguration={
                         'LocationConstraint': region
                     }
                 )
             else:
-                s3.create_bucket(Bucket=bucket_name)
+                s3.create_bucket(Bucket=bucket)
 
             master = local.copy()
         else:
             # something went wrong
             quit(red('Bucket exists (according to config) but cannot be accessed; are you logged in?'))
     else:
-        sys.exit(red('Only AWS pulls are supported in this version'))
+        sys.exit(red('Only aws pulls are supported in this version'))
 
     return master
 
@@ -493,6 +493,55 @@ def dat_overwrite_master():
     except:
         quit(red('Failed to push file; are you logged in?'))
 
+def dat_pull(dry=False, verbose=False):
+
+    # Read in config file
+    if verbose: print('Reading config')
+    config = read_config()
+
+    # Get master/current/local
+    if verbose: print('Taking inventory')
+    current = take_inventory(config)
+    local = read_inventory('.dat/local')
+    if verbose: print('Obtaining master')
+    master = get_master(config)
+
+    # Create pull, purge lists
+    if verbose: print('Creating pull, purge lists')
+    pull = needs_pull(master, local)
+    kill = needs_kill(master, local)
+
+    # Check for conflicts
+    if verbose: print('Checking for conflicts')
+    [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
+    [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
+    conflict = sorted(pull_conflict | kill_conflict)
+    if len(conflict) > 0:
+        print(red("Unable to pull the following files: conflict with current\n  " + '\n  '.join(conflict)))
+
+    # Sync
+    if verbose: print('Pulling')
+    resolved = sorted(kill_resolved | pull_resolved)
+    if len(pull | kill):
+        opt = '--delete --exclude "*"'
+        for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
+            opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
+        cmd = f"aws s3 sync s3://{config['aws']} . {opt}"
+        if 'profile' in config.keys():
+            cmd = cmd + f" --profile {config['profile']}"
+        if dry:
+            print(cmd)
+            print('Resolved: ' + str(resolved))
+        else:
+            os.system(cmd)
+            write_inventory(local, '.dat/local')
+    elif len(conflict) == 0:
+        if dry:
+            print('--no command issued--')
+        else:
+            write_inventory(local, '.dat/local')
+        exit('Everything up-to-date')
+
 def dat_push(dry=False, verbose=False):
 
     # Read in config file
@@ -550,56 +599,6 @@ def dat_push(dry=False, verbose=False):
     if not dry:
         config['pushed'] = 'True'
         write_config(config)
-
-def dat_pull(dry=False, verbose=False):
-
-    # Read in config file
-    if verbose: print('Reading config')
-    config = read_config()
-
-    # Get master/current/local
-    if verbose: print('Taking inventory')
-    current = take_inventory(config)
-    local = read_inventory('.dat/local')
-    if verbose: print('Obtaining master')
-    master = get_master(config)
-
-    # Create pull, purge lists
-    if verbose: print('Creating pull, purge lists')
-    pull = needs_pull(master, local)
-    kill = needs_kill(master, local)
-
-    # Check for conflicts
-    if verbose: print('Checking for conflicts')
-    [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
-    [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
-    conflict = sorted(pull_conflict | kill_conflict)
-    if len(conflict) > 0:
-        print(red("Unable to pull the following files: conflict with current\n  " + '\n  '.join(conflict)))
-
-    # Sync
-    if verbose: print('Pulling')
-    resolved = sorted(kill_resolved | pull_resolved)
-    if len(pull | kill):
-        opt = '--delete --exclude "*"'
-        for f in sorted((pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved):
-            opt = opt + ' --include ' + '"' + re.sub('^_site', '', f).lstrip('/') + '"'
-        cmd = f"aws s3 sync s3://{config['aws']} . {opt}"
-        if 'profile' in config.keys():
-            cmd = cmd + f" --profile {config['profile']}"
-        if dry:
-            print(cmd)
-            print('Resolved: ' + str(resolved))
-        else:
-            os.system(cmd)
-            write_inventory(local, '.dat/local')
-    elif len(conflict) == 0:
-        if dry:
-            print('--no command issued--')
-        else:
-            write_inventory(local, '.dat/local')
-        exit('Everything up-to-date')
-
 
 def dat_pop(hard=False):
     if not os.path.isdir('.dat/stash'): exit('Error: No stash detected!')

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Push/pull system for cloud synchronization
+"""Push/pull system for cloud synchronization
 
 Usage:
     dat init [--profile=<profile>] [<bucket>]
@@ -148,18 +147,6 @@ def write_config(config, filename='.dat/config'):
     for k in sorted(config.keys()):
         config_file.write(f"{k}: {config[k]}\n")
     config_file.close()
-
-def get_aws_region():
-    """Get the AWS region by running the AWS CLI command."""
-    try:
-        result = subprocess.run(['aws', 'configure', 'get', 'region'], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        else:
-            return None
-    except Exception as e:
-        print(f"Error retrieving AWS region: {e}")
-        return None
 
 def get_master(config, local=None):
     if 'aws' in config.keys():

@@ -55,7 +55,6 @@ from docopt import docopt
 
 def dat():
     arg = docopt(__doc__)
-    profile = arg['--profile'] or 'default'
     if arg['init']: dat_init(arg['<bucket>'], arg['--profile'])
     elif arg['checkin']: dat_checkin(arg['<file>'])
     elif arg['checkout']: dat_checkout(arg['<file>'])

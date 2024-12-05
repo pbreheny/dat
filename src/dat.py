@@ -848,14 +848,3 @@ def get_aws_region():
     except Exception as e:
         print(f"Error retrieving AWS region: {e}")
         return None
-
-def read_config(filename='.dat/config'):
-    if not os.path.isfile(filename):
-        sys.exit(red(f'Not a dat repository; {filename} does not exist'))
-
-    config = {}
-    with open(filename, 'r') as f:
-        for line in f:
-            key, value = [x.strip() for x in line.split(':', 1)]
-            config[key] = value
-    return config

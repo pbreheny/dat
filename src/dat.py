@@ -587,7 +587,7 @@ def dat_push(dry=False, verbose=False):
 
     # Identify files in purg that still physically exist and match ignore patterns
     purge_ignored_files = [
-        f for f in purg 
+        f for f in purg
         if os.path.exists(f) and any(fnmatch.fnmatch(f, pat) for pat in ignore_patterns)
     ]
 
@@ -601,6 +601,11 @@ def dat_push(dry=False, verbose=False):
             if not dry:
                 cmd = f"aws s3 rm s3://{bucket}/{f} {profile_opt}"
                 os.system(cmd)
+
+        # Remove them from master and local so the inventories are consistent
+        for f in purge_ignored_files:
+            master.pop(f, None)
+            local.pop(f, None)
 
         # Remove these files from purg so they won't be included in the sync command
         purg = purg - set(purge_ignored_files)
@@ -624,12 +629,14 @@ def dat_push(dry=False, verbose=False):
             write_inventory(local, '.dat/local')
             os.remove('.dat/master')
     elif len(conflict) == 0:
-        if not dry: write_inventory(local, '.dat/local')
+        if not dry:
+            write_inventory(local, '.dat/local')
         exit('Everything up-to-date')
 
     if not dry:
         config['pushed'] = 'True'
         write_config(config)
+
 
 
 def dat_pop(hard=False):

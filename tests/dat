@@ -121,4 +121,4 @@ else:
     print(message)
 
 # restore
-os.system('git restore .dat/local')
+shutil.copy('../local.txt', '.dat/local')

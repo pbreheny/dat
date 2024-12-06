@@ -113,7 +113,6 @@ def read_config(filename='.dat/config'):
 
     if os.path.isfile('.dat/local'):
         try:
-            subprocess.run('git rev-parse --is-inside-work-tree-ignore .dat/local', shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             x = subprocess.run('git check-ignore .dat/local', shell=True, stdout=subprocess.PIPE).stdout.decode().strip()
             terminal_width = shutil.get_terminal_size().columns
             if x != '.dat/local':

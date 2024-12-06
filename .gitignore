@@ -1,4 +1,3 @@
 __pycache__
 build
 *.egg-info
-**/.dat/local

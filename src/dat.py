@@ -557,22 +557,17 @@ def dat_pull(dry=False, verbose=False):
         exit('Everything up-to-date')
 
 def dat_push(dry=False, verbose=False):
-
-    # Read in config file
     if verbose: print('Reading config')
     config = read_config()
 
-    # Get current/local
     if verbose: print('Taking inventory')
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
-    # Create push, purg lists
     if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)
 
-    # Either exit or get master
     if len(push | purg) == 0:
         exit('Everything up-to-date')
     else:
@@ -587,7 +582,30 @@ def dat_push(dry=False, verbose=False):
     if len(conflict) > 0:
         print(red("Unable to push the following files: conflict with master\n" + '\n'.join(conflict)))
 
-    # Sync
+    # ---- Begin New Code for Handling Ignored-But-Still-Local Files ----
+    ignore_patterns = read_ignore_patterns()
+
+    # Identify files in purg that still physically exist and match ignore patterns
+    purge_ignored_files = [
+        f for f in purg 
+        if os.path.exists(f) and any(fnmatch.fnmatch(f, pat) for pat in ignore_patterns)
+    ]
+
+    # Explicitly remove these ignored-but-still-local files from S3
+    if purge_ignored_files:
+        bucket = config['aws']
+        profile_opt = f"--profile {config['profile']}" if 'profile' in config else ""
+        for f in purge_ignored_files:
+            if verbose:
+                print(f"Removing ignored file {f} from S3...")
+            if not dry:
+                cmd = f"aws s3 rm s3://{bucket}/{f} {profile_opt}"
+                os.system(cmd)
+
+        # Remove these files from purg so they won't be included in the sync command
+        purg = purg - set(purge_ignored_files)
+    # ---- End New Code ----
+
     if verbose: print('Pushing')
     resolved = sorted(push_resolved | purg_resolved)
     if len(push | purg):
@@ -609,10 +627,10 @@ def dat_push(dry=False, verbose=False):
         if not dry: write_inventory(local, '.dat/local')
         exit('Everything up-to-date')
 
-    # Remove never pushed tag, if present
     if not dry:
         config['pushed'] = 'True'
         write_config(config)
+
 
 def dat_pop(hard=False):
     if not os.path.isdir('.dat/stash'): exit('Error: No stash detected!')

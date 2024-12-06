@@ -49,6 +49,7 @@ import hashlib
 import platform
 import subprocess
 import textwrap
+import fnmatch  # Added for ignore patterns
 from glob import glob
 from botocore.exceptions import ClientError
 from docopt import docopt
@@ -90,12 +91,32 @@ def md5(fname):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+def read_ignore_patterns():
+    ignore_patterns = []
+    ignore_file = '.dat/ignore'
+    if os.path.isfile(ignore_file):
+        with open(ignore_file, 'r') as f:
+            for line in f:
+                pattern = line.strip()
+                if pattern and not pattern.startswith('#'):
+                    ignore_patterns.append(pattern)
+    return ignore_patterns
+
 def take_inventory(config):
+    ignore_patterns = read_ignore_patterns()
     inv = []
     for root, dirs, files in os.walk('.'):
+        # Exclude '.dat' and '.git' directories from being traversed
+        dirs[:] = [d for d in dirs if d not in ['.dat', '.git']]
         for file in files:
-            inv.append(re.sub('^\\./', '', root + '/' + file))
-    inv = [x for x in inv if not x.startswith('.dat') and not x.startswith('.git') and not x == '.DS_Store']
+            file_path = os.path.relpath(os.path.join(root, file), '.')
+            # Exclude files starting with '.dat' or '.git'
+            if file_path.startswith('.dat') or file_path.startswith('.git'):
+                continue
+            # Exclude files matching ignore patterns
+            if any(fnmatch.fnmatch(file_path, pattern) for pattern in ignore_patterns):
+                continue
+            inv.append(file_path)
     out = dict()
     for f in inv:
         out[f] = md5(f)
@@ -457,6 +478,10 @@ def dat_init(id, profile):
     else:
         print(green('Configured for aws bucket: ') + id)
     config.close()
+
+    # Create ignore file
+    with open('.dat/ignore', 'w') as ignore_file:
+        ignore_file.write('.DS_Store\n')
 
 def dat_overwrite_master():
 

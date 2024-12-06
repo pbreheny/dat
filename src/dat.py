@@ -609,6 +609,26 @@ def dat_push(dry=False, verbose=False):
 
         # Remove these files from purg so they won't be included in the sync command
         purg = purg - set(purge_ignored_files)
+
+    # Check if there are any files left to push or purge
+    if len(push | purg) == 0:
+
+        # No other changes, but .dat/master is updated, ensure it is pushed.
+        profile_opt = f"--profile {config['profile']}" if 'profile' in config else ""
+        cmd = f"aws s3 sync --no-follow-symlinks . s3://{config['aws']} --exclude '*' --include '.dat/master' {profile_opt}"
+        if dry:
+            print("[Dry Run] Would have synced updated .dat/master")
+        else:
+            write_inventory(master, '.dat/master')
+            os.system(cmd)
+            write_inventory(local, '.dat/local')
+            os.remove('.dat/master')
+            
+        exit('Master updated remotely, no other changes')
+
+        if not dry:
+            config['pushed'] = 'True'
+            write_config(config)
     # ---- End New Code ----
 
     if verbose: print('Pushing')

@@ -557,17 +557,22 @@ def dat_pull(dry=False, verbose=False):
         exit('Everything up-to-date')
 
 def dat_push(dry=False, verbose=False):
+    
+    # Read in config file
     if verbose: print('Reading config')
     config = read_config()
 
+    # Get current/local
     if verbose: print('Taking inventory')
     current = take_inventory(config)
     local = read_inventory('.dat/local')
 
+    # Create push, purg lists
     if verbose: print('Creating push, purge lists')
     push = needs_push(current, local)
     purg = needs_purge(current, local)
 
+    # Either exit or get master
     if len(push | purg) == 0:
         exit('Everything up-to-date')
     else:
@@ -582,7 +587,7 @@ def dat_push(dry=False, verbose=False):
     if len(conflict) > 0:
         print(red("Unable to push the following files: conflict with master\n" + '\n'.join(conflict)))
 
-    # ---- Begin New Code for Handling Ignored-But-Still-Local Files ----
+    # ---- Begin Code for Handling Ignored-But-Still-Local Files ----
     ignore_patterns = read_ignore_patterns()
 
     # Identify files in purg that still physically exist and match ignore patterns
@@ -629,8 +634,9 @@ def dat_push(dry=False, verbose=False):
         if not dry:
             config['pushed'] = 'True'
             write_config(config)
-    # ---- End New Code ----
+    # ---- End code ----
 
+    # Sync
     if verbose: print('Pushing')
     resolved = sorted(push_resolved | purg_resolved)
     if len(push | purg):
@@ -649,10 +655,10 @@ def dat_push(dry=False, verbose=False):
             write_inventory(local, '.dat/local')
             os.remove('.dat/master')
     elif len(conflict) == 0:
-        if not dry:
-            write_inventory(local, '.dat/local')
+        if not dry: write_inventory(local, '.dat/local')
         exit('Everything up-to-date')
 
+    # Remove never pushed tag, if present
     if not dry:
         config['pushed'] = 'True'
         write_config(config)

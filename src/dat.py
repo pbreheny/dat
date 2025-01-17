@@ -557,7 +557,7 @@ def dat_pull(dry=False, verbose=False):
         exit('Everything up-to-date')
 
 def dat_push(dry=False, verbose=False):
-    
+
     # Read in config file
     if verbose: print('Reading config')
     config = read_config()
@@ -662,8 +662,6 @@ def dat_push(dry=False, verbose=False):
     if not dry:
         config['pushed'] = 'True'
         write_config(config)
-
-
 
 def dat_pop(hard=False):
     if not os.path.isdir('.dat/stash'): exit('Error: No stash detected!')

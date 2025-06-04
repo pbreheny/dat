@@ -171,31 +171,36 @@ def get_master(config, local=None):
         # Try to get master
         cmd = f"aws s3 cp s3://{config['aws']}/.dat/master .dat/master"
         if 'profile' in config.keys(): cmd = cmd + f" --profile {config['profile']}"
-        a = subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        subprocess.run(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
         if os.path.isfile('.dat/master'):
             # download successful
             master = read_inventory('.dat/master')
             os.remove('.dat/master')
         elif config['pushed'] == 'False':
-            # create bucket
+            # set up client
             region = get_aws_region()
             if 'profile' in config.keys():
                 boto3.setup_default_session(profile_name=config['profile'])
             s3 = boto3.client('s3')
 
-            # create bucket
-            bucket = config['aws'].split('/')[0]
-            if region:
-                s3.create_bucket(
-                    Bucket=bucket,
-                    CreateBucketConfiguration={
-                        'LocationConstraint': region
-                    }
-                )
+            if '/' in config['aws']:
+                bucket, *path_parts = config['aws'].split('/')
+                prefix = '/'.join(path_parts)
+                s3.put_object(Bucket=bucket, Key=f'{prefix}/')
             else:
-                s3.create_bucket(Bucket=bucket)
-
+                # create bucket
+                bucket = config['aws'].split('/')[0]
+                if region:
+                    s3.create_bucket(
+                        Bucket=bucket,
+                        CreateBucketConfiguration={
+                            'LocationConstraint': region
+                        }
+                    )
+                else:
+                    s3.create_bucket(Bucket=bucket)
+    
             master = local.copy()
         else:
             # something went wrong

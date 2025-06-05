@@ -144,14 +144,18 @@ def read_config(filename='.dat/config'):
         sys.exit(red(f'Not a dat repository; {filename} does not exit'))
 
     if os.path.isfile('.dat/local'):
-        try:
-            x = subprocess.run('git check-ignore .dat/local', shell=True, stdout=subprocess.PIPE).stdout.decode().strip()
-            terminal_width = shutil.get_terminal_size().columns
+        if git_tracked():
+            x = subprocess.run(
+                ['git', 'check-ignore', '.dat/local'],
+                stdout = subprocess.PIPE,
+                stderr = subprocess.DEVNULL
+            ).stdout.decode().strip()
+
             if x != '.dat/local':
-                msg = 'Warning! You appear to be tracking .dat/local with git. This will almost certainly prevent dat from working correctly. Add'
+                terminal_width = shutil.get_terminal_size().columns
+                msg = ('Warning! You appear to be tracking .dat/local with git. '
+                       'This will almost certainly prevent dat from working correctly. Add')
                 print(red(textwrap.fill(msg, width=terminal_width) + '\n**/.dat/local\nto your .gitignore file'))
-        except:
-            pass
 
     config = {}
     for line in open(filename):
@@ -926,3 +930,15 @@ def get_aws_region():
     except Exception as e:
         print(f"Error retrieving AWS region: {e}")
         return None
+    
+def git_tracked():
+    try:
+        subprocess.run(
+            ['git', 'rev-parse', '--is-inside-work-tree'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False

@@ -458,11 +458,24 @@ def dat_clone(bucket, folder, profile=None):
     os.mkdir(folder)
 
     # Clone
+    err = 0
     if loc == "aws":
-        cmd = "aws s3 sync s3://" + id + "/ " + folder + "/"
-        if profile is not None:
-            cmd = cmd + f" --profile {profile}"
-        err = os.system(cmd)
+        # Verify that user is logged in
+        try:
+            subprocess.run(
+                'aws sts get-caller-identity',
+                stdout=subprocess.DEVNULL,
+                check=True,
+                shell=True
+            )
+        except:
+            err = 1
+            print("You are not currently logged into AWS")
+        if not err:
+            cmd = "aws s3 sync s3://" + id + "/ " + folder + "/"
+            if profile is not None:
+                cmd = cmd + f" --profile {profile}"
+            err = os.system(cmd)
     elif loc == "hpc":
         if "argon" in platform.node():
             hub = "/Shared/Fisher/hub/"

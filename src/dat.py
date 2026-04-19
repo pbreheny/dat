@@ -461,16 +461,23 @@ def dat_clone(bucket, folder, profile=None):
     err = 0
     if loc == "aws":
         # Verify that user is logged in
+        verify_cmd = ["aws", "sts", "get-caller-identity"]
+        if profile is not None:
+            verify_cmd.extend(["--profile", profile])
+
         try:
             subprocess.run(
-                'aws sts get-caller-identity',
+                verify_cmd,
                 stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 check=True,
-                shell=True
             )
-        except:
+        except subprocess.CalledProcessError as exc:
             err = 1
+            aws_error = exc.stderr.decode().strip()
             print("You are not currently logged into AWS")
+            if aws_error:
+                print(red(f"AWS error: {aws_error}"))
         if not err:
             cmd = "aws s3 sync s3://" + id + "/ " + folder + "/"
             if profile is not None:

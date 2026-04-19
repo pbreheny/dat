@@ -12,3 +12,9 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 dat = "dat:dat"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+

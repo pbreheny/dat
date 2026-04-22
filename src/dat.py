@@ -495,7 +495,7 @@ def dat_clone(bucket, folder, profile=None):
         print("Error: Central location must be of form aws:id or hpc:id")
     if err:
         os.rmdir(folder)
-        exit()
+        sys.exit(1)
 
     # Write config
     config = {"pushed": "True"}
@@ -547,7 +547,7 @@ def dat_init(id, profile):
 
     # Don't overwrite existing config
     if os.path.isdir(".dat"):
-        exit(red("Error: .dat directory already exists"))
+        sys.exit(red("Error: .dat directory already exists"))
     else:
         os.mkdir(".dat")
 
@@ -667,7 +667,8 @@ def dat_pull(dry=False, verbose=False):
             print("--no command issued--")
         else:
             write_inventory(local, ".dat/local")
-        exit("Everything up-to-date")
+        print("Everything up-to-date")
+        sys.exit(0)
 
 
 def dat_push(dry=False, verbose=False):
@@ -691,7 +692,8 @@ def dat_push(dry=False, verbose=False):
 
     # Either exit or get master
     if len(push | purg) == 0:
-        exit("Everything up-to-date")
+        print("Everything up-to-date")
+        sys.exit(0)
     else:
         if verbose:
             print("Obtaining master")
@@ -756,11 +758,11 @@ def dat_push(dry=False, verbose=False):
             write_inventory(local, ".dat/local")
             os.remove(".dat/master")
 
-        exit("Master updated remotely, no other changes")
-
+        print("Master updated remotely, no other changes")
         if not dry:
             config["pushed"] = "True"
             write_config(config)
+        sys.exit(0)
     # ---- End code ----
 
     # Sync
@@ -791,7 +793,8 @@ def dat_push(dry=False, verbose=False):
     elif len(conflict) == 0:
         if not dry:
             write_inventory(local, ".dat/local")
-        exit("Everything up-to-date")
+        print("Everything up-to-date")
+        sys.exit(0)
 
     # Remove never pushed tag, if present
     if not dry:
@@ -801,17 +804,17 @@ def dat_push(dry=False, verbose=False):
 
 def dat_pop(hard=False):
     if not os.path.isdir(".dat/stash"):
-        exit("Error: No stash detected!")
+        sys.exit("Error: No stash detected!")
     for f in glob(r".dat/stash/*"):
         ff = os.path.basename(f)
         if os.path.isfile(f):
             if hard:
                 shutil.move(f, "./" + ff)
             else:
-                exit(
-                    "Popping stash would overwrite file "
-                    + ff
-                    + ".\nIf you wish to overwrite existing files, rerun with \ndat stash pop --hard"
+                sys.exit(
+                    f"Popping stash would overwrite file {ff}.\n"
+                    "If you wish to overwrite existing files, rerun with\n"
+                    "dat stash pop --hard"
                 )
         else:
             shutil.move(f, ".")
@@ -862,7 +865,7 @@ def dat_stash():
 
     # Check for existing stash
     if os.path.isdir(".dat/stash"):
-        exit("Error: Unpopped stash detected!")
+        sys.exit("Error: Unpopped stash detected!")
 
     # Get master/current/local
     current = take_inventory(config)

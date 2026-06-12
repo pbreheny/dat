@@ -1,36 +1,5 @@
 #!/usr/bin/env python3
-"""Push/pull system for cloud synchronization
-
-Usage:
-    dat init [--profile=<profile>] [<bucket>]
-    dat checkin <file>
-    dat checkout <file>
-    dat clone [--profile=<profile>] <bucket> [<folder>]
-    dat delete
-    dat [-d] [-v] pull
-    dat [-d] [-v] push
-    dat stash
-    dat stash pop [--hard]
-    dat [-r] status
-    dat overwrite-master
-    dat repair-master
-    dat share <account_number> [<username>] [--root] [-v]
-
-Arguments:
-    bucket           Name of the bucket (ex: my-bucket)
-    folder           Name of local folder
-    file             Name of the file to check in or out
-    account_number   AWS account number associated with the IAM user
-    username         IAM username to share the bucket with (omit if using --root)
-
-Options:
-    -d                       Dry run?
-    -r                       Check status against remote?
-    -v                       Verbose? (for debugging)
-    --profile=<profile>      AWS CLI profile to use
-    --hard                   Overwrite existing files when popping stash
-    --root                   Share the bucket with the root account (omit <username> when using this)
-"""
+"""Push/pull system for cloud synchronization of large files via S3."""
 
 # Definitions:
 #   push: local file is changed/new
@@ -49,8 +18,8 @@ import subprocess
 import textwrap
 import fnmatch
 from pathlib import Path
-from botocore.exceptions import ClientError
-from docopt import docopt
+from botocore.exceptions import ClientError, CredentialRetrievalError, NoCredentialsError
+import argparse
 
 # ---------------------------------------------------------------------------
 # Path constants
@@ -66,39 +35,83 @@ _REMOTE  = _DAT_DIR / "remote"
 
 
 def dat():
-    arg = docopt(__doc__)
-    if arg["init"]:
-        dat_init(arg["<bucket>"], arg["--profile"])
-    elif arg["checkin"]:
-        dat_checkin(arg["<file>"])
-    elif arg["checkout"]:
-        dat_checkout(arg["<file>"])
-    elif arg["clone"]:
-        dat_clone(arg["<bucket>"], arg["<folder>"], arg["--profile"])
-    elif arg["delete"]:
+    parser = argparse.ArgumentParser(
+        prog="dat",
+        description="Push/pull system for cloud synchronization of large files via S3.",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="command", required=True)
+
+    p = sub.add_parser("init", help="initialize a new dat repository")
+    p.add_argument("bucket", nargs="?", help="S3 bucket name (auto-generated if omitted)")
+    p.add_argument("--profile", metavar="PROFILE", help="AWS CLI profile")
+
+    p = sub.add_parser("checkin", help="check in a single file")
+    p.add_argument("file")
+
+    p = sub.add_parser("checkout", help="check out a single file")
+    p.add_argument("file")
+
+    p = sub.add_parser("clone", help="clone a remote dat repository")
+    p.add_argument("bucket", help="source bucket or hpc:id")
+    p.add_argument("folder", nargs="?", help="local folder name (defaults to bucket name)")
+    p.add_argument("--profile", metavar="PROFILE", help="AWS CLI profile")
+
+    sub.add_parser("delete", help="delete remote bucket and local .dat directory")
+
+    p = sub.add_parser("pull", help="pull remote changes")
+    p.add_argument("-d", action="store_true", help="dry run")
+    p.add_argument("-v", action="store_true", help="verbose")
+
+    p = sub.add_parser("push", help="push local changes")
+    p.add_argument("-d", action="store_true", help="dry run")
+    p.add_argument("-v", action="store_true", help="verbose")
+
+    p = sub.add_parser("stash", help="stash conflicted files")
+    stash_sub = p.add_subparsers(dest="stash_command", metavar="subcommand")
+    p2 = stash_sub.add_parser("pop", help="restore stashed files")
+    p2.add_argument("--hard", action="store_true", help="overwrite existing files")
+
+    p = sub.add_parser("status", help="show sync status")
+    p.add_argument("-r", action="store_true", help="check against remote")
+
+    sub.add_parser("overwrite-master", help="overwrite remote with local copy")
+    sub.add_parser("repair-master", help="repair corrupted remote master inventory")
+
+    p = sub.add_parser("share", help="share bucket with another AWS account")
+    p.add_argument("account_number", help="AWS account number")
+    p.add_argument("username", nargs="?", help="IAM username (omit with --root)")
+    p.add_argument("--root", action="store_true", help="share with root account")
+    p.add_argument("-v", action="store_true", help="verbose")
+
+    arg = parser.parse_args()
+
+    if arg.command == "init":
+        dat_init(arg.bucket, arg.profile)
+    elif arg.command == "checkin":
+        dat_checkin(arg.file)
+    elif arg.command == "checkout":
+        dat_checkout(arg.file)
+    elif arg.command == "clone":
+        dat_clone(arg.bucket, arg.folder, arg.profile)
+    elif arg.command == "delete":
         dat_delete()
-    elif arg["push"]:
-        dat_push(arg["-d"], arg["-v"])
-    elif arg["pull"]:
-        dat_pull(arg["-d"], arg["-v"])
-    elif arg["stash"]:
-        if arg["pop"]:
-            dat_pop(arg["--hard"])
+    elif arg.command == "push":
+        dat_push(arg.d, arg.v)
+    elif arg.command == "pull":
+        dat_pull(arg.d, arg.v)
+    elif arg.command == "stash":
+        if arg.stash_command == "pop":
+            dat_pop(arg.hard)
         else:
             dat_stash()
-    elif arg["status"]:
-        dat_status(arg["-r"])
-    elif arg["overwrite-master"]:
+    elif arg.command == "status":
+        dat_status(arg.r)
+    elif arg.command == "overwrite-master":
         dat_overwrite_master()
-    elif arg["repair-master"]:
+    elif arg.command == "repair-master":
         dat_repair_master()
-    elif arg["share"]:
-        dat_share(
-            arg["<account_number>"],
-            arg["<username>"],
-            root=arg["--root"],
-            verbose=arg["-v"],
-        )
+    elif arg.command == "share":
+        dat_share(arg.account_number, arg.username, root=arg.root, verbose=arg.v)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +188,14 @@ def _download_all(s3, bucket, prefix, dest_dir):
 class DatRepo:
     def __init__(self, config_path=_CONFIG):
         self.config = read_config(config_path)
-        if "profile" in self.config:
-            session = boto3.Session(profile_name=self.config["profile"])
-            self.s3 = session.client("s3")
-        else:
-            self.s3 = boto3.client("s3")
+        try:
+            if "profile" in self.config:
+                session = boto3.Session(profile_name=self.config["profile"])
+                self.s3 = session.client("s3")
+            else:
+                self.s3 = boto3.client("s3")
+        except (NoCredentialsError, CredentialRetrievalError) as e:
+            die(f"AWS credentials unavailable\n\n{e}\nRun 'aws login' or configure credentials first.")
         self.bucket, self.prefix = _parse_bucket(self.config["aws"])
 
     def key(self, path):

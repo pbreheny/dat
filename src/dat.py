@@ -117,6 +117,10 @@ def blue(x):
     return "\033[01;38;5;39m" + x + "\033[0m"
 
 
+def die(msg):
+    sys.exit(red(msg))
+
+
 # ---------------------------------------------------------------------------
 # Hashing
 # ---------------------------------------------------------------------------
@@ -208,7 +212,7 @@ class DatRepo:
             if code in ("404", "NoSuchKey"):
                 if self.config.get("pushed") == "False":
                     if local is None:
-                        sys.exit(red("Repository has never been pushed; run 'dat push' first"))
+                        die("Repository has never been pushed; run 'dat push' first")
                     region = get_aws_region(self.config.get("profile"))
                     if "/" in self.config["aws"]:
                         b, path_parts = self.config["aws"].split("/", 1)
@@ -222,11 +226,9 @@ class DatRepo:
                         self.s3.create_bucket(Bucket=self.bucket)
                     master = local.copy()
                 else:
-                    sys.exit(
-                        red("Bucket exists (according to config) but cannot be accessed; are you logged in?")
-                    )
+                    die("Bucket exists (according to config) but cannot be accessed; are you logged in?")
             else:
-                sys.exit(red(f"Failed to access S3: {e}"))
+                die(f"Failed to access S3: {e}")
         return master
 
     def save_config(self, filename=_CONFIG):
@@ -295,7 +297,7 @@ def read_inventory(fname=_LOCAL):
 def read_config(filename=_CONFIG):
     filename = Path(filename)
     if not filename.is_file():
-        sys.exit(red(f"Not a dat repository; {filename} does not exist"))
+        die(f"Not a dat repository; {filename} does not exist")
 
     if _LOCAL.is_file():
         if git_tracked():
@@ -484,7 +486,7 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
 
 def dat_checkin(filename):
     if not Path(filename).is_file():
-        sys.exit(red(f'"{filename}" does not exist'))
+        die(f'"{filename}" does not exist')
     repo = DatRepo()
 
     current = take_inventory(repo.config)
@@ -500,7 +502,7 @@ def dat_checkin(filename):
         write_inventory(local, _LOCAL)
         _MASTER.unlink()
     except ClientError as e:
-        sys.exit(red(f"Failed to push file: {e}"))
+        die(f"Failed to push file: {e}")
 
 
 def dat_checkout(filename):
@@ -510,7 +512,7 @@ def dat_checkout(filename):
     try:
         repo.download(filename)
     except ClientError as e:
-        sys.exit(red(f"Failed to pull file: {e}"))
+        die(f"Failed to pull file: {e}")
 
     current = take_inventory(repo.config)
     local = read_inventory()
@@ -529,7 +531,7 @@ def dat_clone(bucket, folder, profile=None):
 
     folder_path = Path(folder)
     if folder_path.is_dir():
-        sys.exit(red(f'Error: Directory "{folder}" already exists'))
+        die(f'Directory "{folder}" already exists')
     folder_path.mkdir()
 
     err = 0
@@ -586,7 +588,7 @@ def dat_delete():
         try:
             all_buckets = [b["Name"] for b in repo.s3.list_buckets()["Buckets"]]
         except ClientError:
-            sys.exit(red('Token has expired; run "aws login"'))
+            die('Token has expired; run "aws login"')
 
         if repo.bucket in all_buckets:
             paginator = repo.s3.get_paginator("list_objects_v2")
@@ -597,14 +599,14 @@ def dat_delete():
             repo.s3.delete_bucket(Bucket=repo.bucket)
             print(f"Deleted aws bucket: {repo.bucket}")
         else:
-            sys.exit(red(f"Bucket {repo.bucket} does not exist"))
+            die(f"Bucket {repo.bucket} does not exist")
 
     shutil.rmtree(_DAT_DIR)
 
 
 def dat_init(id, profile):
     if _DAT_DIR.is_dir():
-        sys.exit(red("Error: .dat directory already exists"))
+        die("Error: .dat directory already exists")
     _DAT_DIR.mkdir()
 
     if id is None:
@@ -630,7 +632,7 @@ def dat_overwrite_master():
         textwrap.fill(msg, width=terminal_width) + "\nPress (y) to confirm: "
     )
     if confirm != "y":
-        sys.exit("Exiting...")
+        die("Exiting...")
 
     current = take_inventory(repo.config)
     write_inventory(current, _MASTER)
@@ -661,7 +663,7 @@ def dat_overwrite_master():
         write_inventory(current, _LOCAL)
         _MASTER.unlink()
     except ClientError as e:
-        sys.exit(red(f"Failed to overwrite remote: {e}"))
+        die(f"Failed to overwrite remote: {e}")
 
 
 def dat_pull(dry=False, verbose=False):
@@ -829,13 +831,13 @@ def dat_push(dry=False, verbose=False):
 
 def dat_pop(hard=False):
     if not _STASH.is_dir():
-        sys.exit("Error: No stash detected!")
+        die("Error: No stash detected!")
     for item in _STASH.iterdir():
         if item.is_file():
             if hard:
                 shutil.move(item, Path(".") / item.name)
             else:
-                sys.exit(
+                die(
                     f"Popping stash would overwrite file {item.name}.\n"
                     "If you wish to overwrite existing files, rerun with\n"
                     "dat stash pop --hard"
@@ -848,15 +850,13 @@ def dat_pop(hard=False):
 def dat_repair_master():
     repo = DatRepo()
     if _REMOTE.is_dir():
-        sys.exit(
-            red(".dat/remote: This directory already exists. repair-master cannot continue")
-        )
+        die(".dat/remote: This directory already exists. repair-master cannot continue")
 
     try:
         repo.download_all(_REMOTE)
     except ClientError as e:
         shutil.rmtree(_REMOTE, ignore_errors=True)
-        sys.exit(red(f"Failed to download remote: {e}"))
+        die(f"Failed to download remote: {e}")
 
     remote_master = _REMOTE / ".dat" / "master"
     remote_master.parent.mkdir(parents=True, exist_ok=True)
@@ -866,7 +866,7 @@ def dat_repair_master():
     try:
         repo.upload(remote_master, ".dat/master")
     except ClientError as e:
-        sys.exit(red(f"Failed to upload master: {e}"))
+        die(f"Failed to upload master: {e}")
     finally:
         shutil.rmtree(_REMOTE)
 
@@ -875,7 +875,7 @@ def dat_stash():
     repo = DatRepo()
 
     if _STASH.is_dir():
-        sys.exit("Error: Unpopped stash detected!")
+        die("Error: Unpopped stash detected!")
 
     current = take_inventory(repo.config)
     local = read_inventory()
@@ -1004,7 +1004,7 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         user_arn = f"arn:aws:iam::{account_number}:root"
     else:
         if not username:
-            raise ValueError("Username is required unless specifying --root.")
+            die("Username is required unless specifying --root.")
         user_arn = f"arn:aws:iam::{account_number}:user/{username}"
 
     if verbose:
@@ -1042,7 +1042,7 @@ def dat_share(account_number, username=None, root=False, verbose=False):
                 print("[DEBUG] No existing bucket policy found. Creating a new one.")
             policy = {"Version": "2012-10-17", "Statement": []}
         else:
-            raise e
+            die(f"S3 error getting bucket policy: {e}")
 
     existing_principals = {
         statement["Principal"]["AWS"]

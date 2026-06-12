@@ -38,19 +38,31 @@ Options:
 #   purge: local file has been deleted (remove from master?)
 #   kill: remote file has been deleted (remove from current?)
 
-import os
 import sys
 import boto3
 import json
 import shutil
 import hashlib
+import getpass
 import platform
 import subprocess
 import textwrap
 import fnmatch
-from glob import glob
+from pathlib import Path
 from botocore.exceptions import ClientError
 from docopt import docopt
+
+# ---------------------------------------------------------------------------
+# Path constants
+# ---------------------------------------------------------------------------
+
+_DAT_DIR = Path(".dat")
+_CONFIG  = _DAT_DIR / "config"
+_LOCAL   = _DAT_DIR / "local"
+_MASTER  = _DAT_DIR / "master"
+_IGNORE  = _DAT_DIR / "ignore"
+_STASH   = _DAT_DIR / "stash"
+_REMOTE  = _DAT_DIR / "remote"
 
 
 def dat():
@@ -136,6 +148,7 @@ def _full_key(prefix, path):
 
 def _download_all(s3, bucket, prefix, dest_dir):
     """Download every object under prefix into dest_dir, preserving relative paths."""
+    dest_dir = Path(dest_dir)
     paginator = s3.get_paginator("list_objects_v2")
     kwargs = {"Bucket": bucket}
     if prefix:
@@ -146,9 +159,9 @@ def _download_all(s3, bucket, prefix, dest_dir):
             rel = key[len(prefix) + 1:] if prefix else key
             if not rel:
                 continue
-            local_path = os.path.join(dest_dir, rel)
-            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-            s3.download_file(bucket, key, local_path)
+            local_path = dest_dir / rel
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, key, str(local_path))
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +169,7 @@ def _download_all(s3, bucket, prefix, dest_dir):
 # ---------------------------------------------------------------------------
 
 class DatRepo:
-    def __init__(self, config_path=".dat/config"):
+    def __init__(self, config_path=_CONFIG):
         self.config = read_config(config_path)
         if "profile" in self.config:
             session = boto3.Session(profile_name=self.config["profile"])
@@ -166,9 +179,10 @@ class DatRepo:
         self.bucket, self.prefix = _parse_bucket(self.config["aws"])
 
     def key(self, path):
-        return _full_key(self.prefix, path)
+        return _full_key(self.prefix, str(path))
 
     def upload(self, local_path, s3_path=None):
+        local_path = str(local_path)
         if s3_path is None:
             s3_path = local_path
         self.s3.upload_file(local_path, self.bucket, self.key(s3_path))
@@ -176,19 +190,19 @@ class DatRepo:
     def download(self, s3_path, local_path=None):
         if local_path is None:
             local_path = s3_path
-        self.s3.download_file(self.bucket, self.key(s3_path), local_path)
+        self.s3.download_file(self.bucket, self.key(str(s3_path)), str(local_path))
 
     def delete(self, s3_path):
-        self.s3.delete_object(Bucket=self.bucket, Key=self.key(s3_path))
+        self.s3.delete_object(Bucket=self.bucket, Key=self.key(str(s3_path)))
 
     def download_all(self, dest_dir):
         _download_all(self.s3, self.bucket, self.prefix, dest_dir)
 
     def get_master(self, local=None):
         try:
-            self.download(".dat/master", ".dat/master")
-            master = read_inventory(".dat/master")
-            os.remove(".dat/master")
+            self.download(".dat/master", _MASTER)
+            master = read_inventory(_MASTER)
+            _MASTER.unlink()
         except ClientError as e:
             code = e.response["Error"]["Code"]
             if code in ("404", "NoSuchKey"):
@@ -215,7 +229,7 @@ class DatRepo:
                 sys.exit(red(f"Failed to access S3: {e}"))
         return master
 
-    def save_config(self, filename=".dat/config"):
+    def save_config(self, filename=_CONFIG):
         write_config(self.config, filename)
 
 
@@ -223,75 +237,78 @@ class DatRepo:
 # Inventory
 # ---------------------------------------------------------------------------
 
-def read_ignore_patterns():
-    ignore_patterns = []
-    ignore_file = ".dat/ignore"
-    if os.path.isfile(ignore_file):
-        with open(ignore_file, "r") as f:
-            for line in f:
-                pattern = line.strip()
-                if pattern and not pattern.startswith("#"):
-                    ignore_patterns.append(pattern)
-    return ignore_patterns
+def _iter_files(root):
+    """Yield all files under root, skipping .dat and .git directories."""
+    for item in root.iterdir():
+        if item.is_dir():
+            if item.name not in (".dat", ".git"):
+                yield from _iter_files(item)
+        elif item.is_file():
+            yield item
 
 
-def take_inventory(config):
-    ignore_patterns = read_ignore_patterns()
-    inv = []
-    for root, dirs, files in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in [".dat", ".git"]]
-        for file in files:
-            file_path = os.path.relpath(os.path.join(root, file), ".")
-            if file_path.startswith(".dat") or file_path.startswith(".git"):
-                continue
-            if any(fnmatch.fnmatch(file_path, pattern) for pattern in ignore_patterns):
-                continue
-            inv.append(file_path)
-    out = dict()
-    for f in inv:
-        out[f] = md5(f)
+def read_ignore_patterns(ignore_file=_IGNORE):
+    patterns = []
+    ignore_file = Path(ignore_file)
+    if ignore_file.is_file():
+        for line in ignore_file.read_text().splitlines():
+            pattern = line.strip()
+            if pattern and not pattern.startswith("#"):
+                patterns.append(pattern)
+    return patterns
+
+
+def take_inventory(config, root=None):
+    root = Path(root) if root is not None else Path(".")
+    ignore_patterns = read_ignore_patterns(root / ".dat" / "ignore")
+    out = {}
+    for path in _iter_files(root):
+        f = str(path.relative_to(root))
+        if any(fnmatch.fnmatch(f, pattern) for pattern in ignore_patterns):
+            continue
+        out[f] = md5(path)
     return out
 
 
 def write_inventory(x, fname):
-    f = open(fname, "w")
-    for d in sorted(x.keys()):
-        f.write(d + "\t" + x[d] + "\n")
-    f.close()
+    with open(fname, "w") as f:
+        for d in sorted(x.keys()):
+            f.write(d + "\t" + x[d] + "\n")
 
 
-def read_inventory(fname=".dat/local"):
-    if os.path.isfile(fname):
-        f = open(fname)
-        out = dict()
-        for line in f:
-            row = line.strip().split("\t")
-            out[row[0]] = row[1]
-    else:
+def read_inventory(fname=_LOCAL):
+    fname = Path(fname)
+    if fname.is_file():
         out = {}
-    return out
+        for line in fname.read_text().splitlines():
+            if line:
+                row = line.split("\t")
+                out[row[0]] = row[1]
+        return out
+    return {}
 
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-def read_config(filename=".dat/config"):
-    if not os.path.isfile(filename):
-        sys.exit(red(f"Not a dat repository; {filename} does not exit"))
+def read_config(filename=_CONFIG):
+    filename = Path(filename)
+    if not filename.is_file():
+        sys.exit(red(f"Not a dat repository; {filename} does not exist"))
 
-    if os.path.isfile(".dat/local"):
+    if _LOCAL.is_file():
         if git_tracked():
             x = (
                 subprocess.run(
-                    ["git", "check-ignore", ".dat/local"],
+                    ["git", "check-ignore", str(_LOCAL)],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                 )
                 .stdout.decode()
                 .strip()
             )
-            if x != ".dat/local":
+            if x != str(_LOCAL):
                 terminal_width = shutil.get_terminal_size().columns
                 msg = (
                     "Warning! You appear to be tracking .dat/local with git. "
@@ -305,17 +322,17 @@ def read_config(filename=".dat/config"):
                 )
 
     config = {}
-    for line in open(filename):
-        y = [x.strip() for x in line.split(":")]
-        config[y[0]] = y[1]
+    for line in filename.read_text().splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            config[k.strip()] = v.strip()
     return config
 
 
-def write_config(config, filename=".dat/config"):
-    config_file = open(filename, "w")
-    for k in sorted(config.keys()):
-        config_file.write(f"{k}: {config[k]}\n")
-    config_file.close()
+def write_config(config, filename=_CONFIG):
+    with open(filename, "w") as f:
+        for k in sorted(config.keys()):
+            f.write(f"{k}: {config[k]}\n")
 
 
 def get_aws_region(profile=None):
@@ -466,22 +483,22 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
 # ---------------------------------------------------------------------------
 
 def dat_checkin(filename):
-    if not os.path.isfile(filename):
+    if not Path(filename).is_file():
         sys.exit(red(f'"{filename}" does not exist'))
     repo = DatRepo()
 
     current = take_inventory(repo.config)
-    local = read_inventory(".dat/local")
+    local = read_inventory()
     local[filename] = current[filename]
     master = repo.get_master(local)
     master[filename] = current[filename]
 
     try:
-        write_inventory(master, ".dat/master")
+        write_inventory(master, _MASTER)
         repo.upload(filename)
-        repo.upload(".dat/master")
-        write_inventory(local, ".dat/local")
-        os.remove(".dat/master")
+        repo.upload(_MASTER)
+        write_inventory(local, _LOCAL)
+        _MASTER.unlink()
     except ClientError as e:
         sys.exit(red(f"Failed to push file: {e}"))
 
@@ -489,18 +506,16 @@ def dat_checkin(filename):
 def dat_checkout(filename):
     repo = DatRepo()
 
-    dest_dir = os.path.dirname(filename)
-    if dest_dir:
-        os.makedirs(dest_dir, exist_ok=True)
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
     try:
         repo.download(filename)
     except ClientError as e:
         sys.exit(red(f"Failed to pull file: {e}"))
 
     current = take_inventory(repo.config)
-    local = read_inventory(".dat/local")
+    local = read_inventory()
     local[filename] = current[filename]
-    write_inventory(local, ".dat/local")
+    write_inventory(local, _LOCAL)
 
 
 def dat_clone(bucket, folder, profile=None):
@@ -512,9 +527,10 @@ def dat_clone(bucket, folder, profile=None):
     else:
         [loc, id] = bucket.split(":")
 
-    if os.path.isdir(folder):
+    folder_path = Path(folder)
+    if folder_path.is_dir():
         sys.exit(red(f'Error: Directory "{folder}" already exists'))
-    os.mkdir(folder)
+    folder_path.mkdir()
 
     err = 0
     if loc == "aws":
@@ -529,34 +545,36 @@ def dat_clone(bucket, folder, profile=None):
             s3 = session.client("s3")
             b, prefix = _parse_bucket(id)
             try:
-                _download_all(s3, b, prefix, folder)
+                _download_all(s3, b, prefix, folder_path)
             except ClientError as e:
                 err = 1
                 print(red(f"Failed to clone repository: {e}"))
     elif loc == "hpc":
         if "argon" in platform.node():
             hub = "/Shared/Fisher/hub/"
-        elif os.path.isdir(os.environ["HOME"] + "/lss"):
-            hub = os.environ["HOME"] + "/lss/Fisher/hub/"
+        elif (Path.home() / "lss").is_dir():
+            hub = str(Path.home() / "lss" / "Fisher" / "hub") + "/"
         else:
             hub = "hpc-data:/Shared/Fisher/hub/"
-        err = os.system("rsync -avz " + hub + id + "/ " + folder + "/")
+        result = subprocess.run(["rsync", "-avz", hub + id + "/", folder + "/"])
+        err = result.returncode
     else:
         err = 1
         print("Error: Central location must be of form aws:id or hpc:id")
 
     if err:
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(folder_path, ignore_errors=True)
         sys.exit(1)
 
     config = {"pushed": "True"}
     config[loc] = id
     if profile is not None:
         config["profile"] = profile
-    write_config(config, f"{folder}/.dat/config")
+    write_config(config, folder_path / ".dat" / "config")
 
-    if os.path.isfile(folder + "/.dat/master"):
-        os.rename(folder + "/.dat/master", folder + "/.dat/local")
+    master_file = folder_path / ".dat" / "master"
+    if master_file.is_file():
+        master_file.rename(folder_path / ".dat" / "local")
     else:
         print("Warning: No .dat/master file -- upgrade dat version to md5")
 
@@ -581,31 +599,27 @@ def dat_delete():
         else:
             sys.exit(red(f"Bucket {repo.bucket} does not exist"))
 
-    shutil.rmtree(".dat")
+    shutil.rmtree(_DAT_DIR)
 
 
 def dat_init(id, profile):
-    if os.path.isdir(".dat"):
+    if _DAT_DIR.is_dir():
         sys.exit(red("Error: .dat directory already exists"))
-    else:
-        os.mkdir(".dat")
+    _DAT_DIR.mkdir()
 
     if id is None:
-        username = os.environ.get("USERNAME") or os.environ.get("USER")
-        id = f"{username}.{os.getcwd().replace(os.environ['HOME'], '').strip('/').replace('/', '.').lower()}"
+        username = getpass.getuser()
+        id = f"{username}.{str(Path.cwd()).replace(str(Path.home()), '').strip('/').replace('/', '.').lower()}"
 
-    config = open(".dat/config", "w")
-    config.write(f"aws: {id}\n")
-    config.write(f"pushed: False\n")
+    config = {"aws": id, "pushed": "False"}
     if profile is not None:
-        config.write(f"profile: {profile}\n")
+        config["profile"] = profile
         print(green(f"Configured for profile={profile} aws bucket: ") + id)
     else:
         print(green("Configured for aws bucket: ") + id)
-    config.close()
+    write_config(config)
 
-    with open(".dat/ignore", "w") as ignore_file:
-        ignore_file.write(".DS_Store\n")
+    _IGNORE.write_text(".DS_Store\n")
 
 
 def dat_overwrite_master():
@@ -619,14 +633,14 @@ def dat_overwrite_master():
         sys.exit("Exiting...")
 
     current = take_inventory(repo.config)
-    write_inventory(current, ".dat/master")
-    if os.path.isfile(".dat/local"):
-        os.remove(".dat/local")
+    write_inventory(current, _MASTER)
+    if _LOCAL.is_file():
+        _LOCAL.unlink()
 
     try:
         for f in current:
             repo.upload(f)
-        repo.upload(".dat/master")
+        repo.upload(_MASTER)
 
         # Delete S3 objects not present locally
         local_keys = {repo.key(f) for f in current}
@@ -644,8 +658,8 @@ def dat_overwrite_master():
             if to_delete:
                 repo.s3.delete_objects(Bucket=repo.bucket, Delete={"Objects": to_delete})
 
-        write_inventory(current, ".dat/local")
-        os.remove(".dat/master")
+        write_inventory(current, _LOCAL)
+        _MASTER.unlink()
     except ClientError as e:
         sys.exit(red(f"Failed to overwrite remote: {e}"))
 
@@ -658,7 +672,7 @@ def dat_pull(dry=False, verbose=False):
     if verbose:
         print("Taking inventory")
     current = take_inventory(repo.config)
-    local = read_inventory(".dat/local")
+    local = read_inventory()
     if verbose:
         print("Obtaining master")
     master = repo.get_master()
@@ -686,7 +700,7 @@ def dat_pull(dry=False, verbose=False):
 
     if not active and not conflict:
         if not dry:
-            write_inventory(local, ".dat/local")
+            write_inventory(local, _LOCAL)
         print("Everything up-to-date")
         sys.exit(0)
 
@@ -704,14 +718,13 @@ def dat_pull(dry=False, verbose=False):
     else:
         for f in sorted(active):
             if f in pull:
-                dest_dir = os.path.dirname(f)
-                if dest_dir:
-                    os.makedirs(dest_dir, exist_ok=True)
+                Path(f).parent.mkdir(parents=True, exist_ok=True)
                 repo.download(f)
             elif f in kill:
-                if os.path.exists(f):
-                    os.remove(f)
-        write_inventory(local, ".dat/local")
+                p = Path(f)
+                if p.exists():
+                    p.unlink()
+        write_inventory(local, _LOCAL)
 
 
 def dat_push(dry=False, verbose=False):
@@ -722,7 +735,7 @@ def dat_push(dry=False, verbose=False):
     if verbose:
         print("Taking inventory")
     current = take_inventory(repo.config)
-    local = read_inventory(".dat/local")
+    local = read_inventory()
 
     if verbose:
         print("Creating push, purge lists")
@@ -754,7 +767,7 @@ def dat_push(dry=False, verbose=False):
     ignore_patterns = read_ignore_patterns()
     purge_ignored = {
         f for f in purg
-        if os.path.exists(f) and any(fnmatch.fnmatch(f, pat) for pat in ignore_patterns)
+        if Path(f).exists() and any(fnmatch.fnmatch(f, pat) for pat in ignore_patterns)
     }
     if purge_ignored and not dry:
         for f in purge_ignored:
@@ -779,10 +792,10 @@ def dat_push(dry=False, verbose=False):
         if dry:
             print("[Dry Run] Would have synced updated .dat/master")
         else:
-            write_inventory(master, ".dat/master")
-            repo.upload(".dat/master")
-            write_inventory(local, ".dat/local")
-            os.remove(".dat/master")
+            write_inventory(master, _MASTER)
+            repo.upload(_MASTER)
+            write_inventory(local, _LOCAL)
+            _MASTER.unlink()
             repo.config["pushed"] = "True"
             repo.save_config()
         print("Master updated remotely, no other changes")
@@ -799,8 +812,8 @@ def dat_push(dry=False, verbose=False):
         if resolved:
             print("Resolved: " + str(resolved))
     else:
-        write_inventory(master, ".dat/master")
-        repo.upload(".dat/master")
+        write_inventory(master, _MASTER)
+        repo.upload(_MASTER)
         for f in sorted(active & push):
             repo.upload(f)
         for f in sorted(active & purg):
@@ -808,69 +821,66 @@ def dat_push(dry=False, verbose=False):
                 repo.delete(f)
             except ClientError:
                 pass
-        write_inventory(local, ".dat/local")
-        os.remove(".dat/master")
+        write_inventory(local, _LOCAL)
+        _MASTER.unlink()
         repo.config["pushed"] = "True"
         repo.save_config()
 
 
 def dat_pop(hard=False):
-    if not os.path.isdir(".dat/stash"):
+    if not _STASH.is_dir():
         sys.exit("Error: No stash detected!")
-    for f in glob(r".dat/stash/*"):
-        ff = os.path.basename(f)
-        if os.path.isfile(f):
+    for item in _STASH.iterdir():
+        if item.is_file():
             if hard:
-                shutil.move(f, "./" + ff)
+                shutil.move(item, Path(".") / item.name)
             else:
                 sys.exit(
-                    f"Popping stash would overwrite file {ff}.\n"
+                    f"Popping stash would overwrite file {item.name}.\n"
                     "If you wish to overwrite existing files, rerun with\n"
                     "dat stash pop --hard"
                 )
         else:
-            shutil.move(f, ".")
-    os.rmdir(".dat/stash")
-    return ()
+            shutil.move(item, Path("."))
+    _STASH.rmdir()
 
 
 def dat_repair_master():
     repo = DatRepo()
-    if os.path.isdir(".dat/remote"):
+    if _REMOTE.is_dir():
         sys.exit(
             red(".dat/remote: This directory already exists. repair-master cannot continue")
         )
 
     try:
-        repo.download_all(".dat/remote")
+        repo.download_all(_REMOTE)
     except ClientError as e:
-        shutil.rmtree(".dat/remote", ignore_errors=True)
+        shutil.rmtree(_REMOTE, ignore_errors=True)
         sys.exit(red(f"Failed to download remote: {e}"))
 
-    old_cwd = os.getcwd()
-    os.chdir(".dat/remote")
-    master = take_inventory(repo.config)
-    write_inventory(master, ".dat/master")
-    os.chdir(old_cwd)
+    remote_master = _REMOTE / ".dat" / "master"
+    remote_master.parent.mkdir(parents=True, exist_ok=True)
+    master = take_inventory(repo.config, root=_REMOTE)
+    write_inventory(master, remote_master)
 
     try:
-        repo.upload(".dat/remote/.dat/master", ".dat/master")
+        repo.upload(remote_master, ".dat/master")
     except ClientError as e:
         sys.exit(red(f"Failed to upload master: {e}"))
     finally:
-        shutil.rmtree(".dat/remote")
+        shutil.rmtree(_REMOTE)
 
 
 def dat_stash():
     repo = DatRepo()
 
-    if os.path.isdir(".dat/stash"):
+    if _STASH.is_dir():
         sys.exit("Error: Unpopped stash detected!")
 
     current = take_inventory(repo.config)
-    local = read_inventory(".dat/local")
+    local = read_inventory()
     master = repo.get_master()
-    if len(local) == 0:
+    if not local:
         local = current
 
     pull = needs_pull(master, local)
@@ -879,17 +889,17 @@ def dat_stash():
     [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
     conflict = pull_conflict.union(kill_conflict)
 
-    os.mkdir(".dat/stash")
+    _STASH.mkdir()
     for f in conflict:
-        shutil.move(f, ".dat/stash/")
+        shutil.move(f, _STASH)
         local.pop(f)
-        write_inventory(local, ".dat/local")
+        write_inventory(local, _LOCAL)
 
 
 def dat_status(remote):
     repo = DatRepo()
     current = take_inventory(repo.config)
-    local = read_inventory(".dat/local")
+    local = read_inventory()
 
     if repo.config["pushed"] == "False":
         print(red("dat initialized, but never pushed"))
@@ -909,24 +919,24 @@ def dat_status(remote):
             current, local, master, push, hard=False
         )
         master = omaster.copy()
-        write_inventory(local, ".dat/local")
+        write_inventory(local, _LOCAL)
         local = olocal.copy()
         [purg_conflict, purg_resolved] = resolve_purge_conflicts(
             master, local, purg, hard=False
         )
         master = omaster.copy()
-        write_inventory(local, ".dat/local")
+        write_inventory(local, _LOCAL)
         local = olocal.copy()
         [pull_conflict, pull_resolved] = resolve_pull_conflicts(
             current, local, master, pull, hard=False
         )
         master = omaster.copy()
-        write_inventory(local, ".dat/local")
+        write_inventory(local, _LOCAL)
         local = olocal.copy()
         [kill_conflict, kill_resolved] = resolve_kill_conflicts(
             current, local, kill, hard=False
         )
-        write_inventory(local, ".dat/local")
+        write_inventory(local, _LOCAL)
 
         all_conflict = pull_conflict | push_conflict | purg_conflict | kill_conflict
         conflict = sorted(all_conflict - (kill_conflict & push))

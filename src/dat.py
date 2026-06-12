@@ -89,7 +89,10 @@ def dat():
         )
 
 
-# ANSI escape sequences
+# ---------------------------------------------------------------------------
+# ANSI color helpers
+# ---------------------------------------------------------------------------
+
 def red(x):
     return "\033[01;38;5;196m" + x + "\033[0m"
 
@@ -102,6 +105,10 @@ def blue(x):
     return "\033[01;38;5;39m" + x + "\033[0m"
 
 
+# ---------------------------------------------------------------------------
+# Hashing
+# ---------------------------------------------------------------------------
+
 def md5(fname):
     hash_md5 = hashlib.md5()
     with open(fname, "rb") as f:
@@ -111,14 +118,8 @@ def md5(fname):
 
 
 # ---------------------------------------------------------------------------
-# S3 helpers
+# Low-level S3 utilities (used by DatRepo and by dat_clone before config exists)
 # ---------------------------------------------------------------------------
-
-def _s3_client(config):
-    if "profile" in config:
-        return boto3.Session(profile_name=config["profile"]).client("s3")
-    return boto3.client("s3")
-
 
 def _parse_bucket(aws_str):
     """Return (bucket, prefix) where prefix is an empty string when absent."""
@@ -148,6 +149,74 @@ def _download_all(s3, bucket, prefix, dest_dir):
             local_path = os.path.join(dest_dir, rel)
             os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
             s3.download_file(bucket, key, local_path)
+
+
+# ---------------------------------------------------------------------------
+# DatRepo — owns config, S3 client, bucket, and prefix
+# ---------------------------------------------------------------------------
+
+class DatRepo:
+    def __init__(self, config_path=".dat/config"):
+        self.config = read_config(config_path)
+        if "profile" in self.config:
+            session = boto3.Session(profile_name=self.config["profile"])
+            self.s3 = session.client("s3")
+        else:
+            self.s3 = boto3.client("s3")
+        self.bucket, self.prefix = _parse_bucket(self.config["aws"])
+
+    def key(self, path):
+        return _full_key(self.prefix, path)
+
+    def upload(self, local_path, s3_path=None):
+        if s3_path is None:
+            s3_path = local_path
+        self.s3.upload_file(local_path, self.bucket, self.key(s3_path))
+
+    def download(self, s3_path, local_path=None):
+        if local_path is None:
+            local_path = s3_path
+        self.s3.download_file(self.bucket, self.key(s3_path), local_path)
+
+    def delete(self, s3_path):
+        self.s3.delete_object(Bucket=self.bucket, Key=self.key(s3_path))
+
+    def download_all(self, dest_dir):
+        _download_all(self.s3, self.bucket, self.prefix, dest_dir)
+
+    def get_master(self, local=None):
+        try:
+            self.download(".dat/master", ".dat/master")
+            master = read_inventory(".dat/master")
+            os.remove(".dat/master")
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code in ("404", "NoSuchKey"):
+                if self.config.get("pushed") == "False":
+                    if local is None:
+                        sys.exit(red("Repository has never been pushed; run 'dat push' first"))
+                    region = get_aws_region(self.config.get("profile"))
+                    if "/" in self.config["aws"]:
+                        b, path_parts = self.config["aws"].split("/", 1)
+                        self.s3.put_object(Bucket=b, Key=f"{path_parts.rstrip('/')}/")
+                    elif region:
+                        self.s3.create_bucket(
+                            Bucket=self.bucket,
+                            CreateBucketConfiguration={"LocationConstraint": region},
+                        )
+                    else:
+                        self.s3.create_bucket(Bucket=self.bucket)
+                    master = local.copy()
+                else:
+                    sys.exit(
+                        red("Bucket exists (according to config) but cannot be accessed; are you logged in?")
+                    )
+            else:
+                sys.exit(red(f"Failed to access S3: {e}"))
+        return master
+
+    def save_config(self, filename=".dat/config"):
+        write_config(self.config, filename)
 
 
 # ---------------------------------------------------------------------------
@@ -252,47 +321,6 @@ def write_config(config, filename=".dat/config"):
 def get_aws_region(profile=None):
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
     return session.region_name
-
-
-def get_master(config, local=None):
-    if "aws" not in config:
-        sys.exit(red("Only aws pulls are supported in this version"))
-
-    s3 = _s3_client(config)
-    bucket, prefix = _parse_bucket(config["aws"])
-
-    try:
-        s3.download_file(bucket, _full_key(prefix, ".dat/master"), ".dat/master")
-        master = read_inventory(".dat/master")
-        os.remove(".dat/master")
-    except ClientError as e:
-        code = e.response["Error"]["Code"]
-        if code in ("404", "NoSuchKey"):
-            if config.get("pushed") == "False":
-                if local is None:
-                    sys.exit(red("Repository has never been pushed; run 'dat push' first"))
-                region = get_aws_region(config.get("profile"))
-                if "/" in config["aws"]:
-                    b, path_parts = config["aws"].split("/", 1)
-                    s3.put_object(Bucket=b, Key=f"{path_parts.rstrip('/')}/")
-                elif region:
-                    s3.create_bucket(
-                        Bucket=bucket,
-                        CreateBucketConfiguration={"LocationConstraint": region},
-                    )
-                else:
-                    s3.create_bucket(Bucket=bucket)
-                master = local.copy()
-            else:
-                sys.exit(
-                    red(
-                        "Bucket exists (according to config) but cannot be accessed; are you logged in?"
-                    )
-                )
-        else:
-            sys.exit(red(f"Failed to access S3: {e}"))
-
-    return master
 
 
 # ---------------------------------------------------------------------------
@@ -440,20 +468,18 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
 def dat_checkin(filename):
     if not os.path.isfile(filename):
         sys.exit(red(f'"{filename}" does not exist'))
-    config = read_config()
+    repo = DatRepo()
 
-    current = take_inventory(config)
+    current = take_inventory(repo.config)
     local = read_inventory(".dat/local")
     local[filename] = current[filename]
-    master = get_master(config, local)
+    master = repo.get_master(local)
     master[filename] = current[filename]
 
-    s3 = _s3_client(config)
-    bucket, prefix = _parse_bucket(config["aws"])
     try:
         write_inventory(master, ".dat/master")
-        s3.upload_file(filename, bucket, _full_key(prefix, filename))
-        s3.upload_file(".dat/master", bucket, _full_key(prefix, ".dat/master"))
+        repo.upload(filename)
+        repo.upload(".dat/master")
         write_inventory(local, ".dat/local")
         os.remove(".dat/master")
     except ClientError as e:
@@ -461,19 +487,17 @@ def dat_checkin(filename):
 
 
 def dat_checkout(filename):
-    config = read_config()
+    repo = DatRepo()
 
-    s3 = _s3_client(config)
-    bucket, prefix = _parse_bucket(config["aws"])
     dest_dir = os.path.dirname(filename)
     if dest_dir:
         os.makedirs(dest_dir, exist_ok=True)
     try:
-        s3.download_file(bucket, _full_key(prefix, filename), filename)
+        repo.download(filename)
     except ClientError as e:
         sys.exit(red(f"Failed to pull file: {e}"))
 
-    current = take_inventory(config)
+    current = take_inventory(repo.config)
     local = read_inventory(".dat/local")
     local[filename] = current[filename]
     write_inventory(local, ".dat/local")
@@ -538,26 +562,24 @@ def dat_clone(bucket, folder, profile=None):
 
 
 def dat_delete():
-    config = read_config()
+    repo = DatRepo()
 
-    if "/" not in config["aws"]:
-        s3 = _s3_client(config)
-        bucket = config["aws"]
+    if "/" not in repo.config["aws"]:
         try:
-            all_buckets = [b["Name"] for b in s3.list_buckets()["Buckets"]]
+            all_buckets = [b["Name"] for b in repo.s3.list_buckets()["Buckets"]]
         except ClientError:
             sys.exit(red('Token has expired; run "aws login"'))
 
-        if bucket in all_buckets:
-            paginator = s3.get_paginator("list_objects_v2")
-            for page in paginator.paginate(Bucket=bucket):
+        if repo.bucket in all_buckets:
+            paginator = repo.s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=repo.bucket):
                 objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
                 if objects:
-                    s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})
-            s3.delete_bucket(Bucket=bucket)
-            print(f"Deleted aws bucket: {bucket}")
+                    repo.s3.delete_objects(Bucket=repo.bucket, Delete={"Objects": objects})
+            repo.s3.delete_bucket(Bucket=repo.bucket)
+            print(f"Deleted aws bucket: {repo.bucket}")
         else:
-            sys.exit(red(f"Bucket {bucket} does not exist"))
+            sys.exit(red(f"Bucket {repo.bucket} does not exist"))
 
     shutil.rmtree(".dat")
 
@@ -587,7 +609,7 @@ def dat_init(id, profile):
 
 
 def dat_overwrite_master():
-    config = read_config()
+    repo = DatRepo()
     terminal_width = shutil.get_terminal_size().columns
     msg = "Warning: This will completely replace the remote dat repository with your local copy. Are you sure you want to do this?"
     confirm = input(
@@ -596,25 +618,23 @@ def dat_overwrite_master():
     if confirm != "y":
         sys.exit("Exiting...")
 
-    current = take_inventory(config)
+    current = take_inventory(repo.config)
     write_inventory(current, ".dat/master")
     if os.path.isfile(".dat/local"):
         os.remove(".dat/local")
 
-    s3 = _s3_client(config)
-    bucket, prefix = _parse_bucket(config["aws"])
     try:
         for f in current:
-            s3.upload_file(f, bucket, _full_key(prefix, f))
-        s3.upload_file(".dat/master", bucket, _full_key(prefix, ".dat/master"))
+            repo.upload(f)
+        repo.upload(".dat/master")
 
         # Delete S3 objects not present locally
-        local_keys = {_full_key(prefix, f) for f in current}
-        local_keys.add(_full_key(prefix, ".dat/master"))
-        paginator = s3.get_paginator("list_objects_v2")
-        kwargs = {"Bucket": bucket}
-        if prefix:
-            kwargs["Prefix"] = prefix + "/"
+        local_keys = {repo.key(f) for f in current}
+        local_keys.add(repo.key(".dat/master"))
+        paginator = repo.s3.get_paginator("list_objects_v2")
+        kwargs = {"Bucket": repo.bucket}
+        if repo.prefix:
+            kwargs["Prefix"] = repo.prefix + "/"
         for page in paginator.paginate(**kwargs):
             to_delete = [
                 {"Key": obj["Key"]}
@@ -622,7 +642,7 @@ def dat_overwrite_master():
                 if obj["Key"] not in local_keys
             ]
             if to_delete:
-                s3.delete_objects(Bucket=bucket, Delete={"Objects": to_delete})
+                repo.s3.delete_objects(Bucket=repo.bucket, Delete={"Objects": to_delete})
 
         write_inventory(current, ".dat/local")
         os.remove(".dat/master")
@@ -633,15 +653,15 @@ def dat_overwrite_master():
 def dat_pull(dry=False, verbose=False):
     if verbose:
         print("Reading config")
-    config = read_config()
+    repo = DatRepo()
 
     if verbose:
         print("Taking inventory")
-    current = take_inventory(config)
+    current = take_inventory(repo.config)
     local = read_inventory(".dat/local")
     if verbose:
         print("Obtaining master")
-    master = get_master(config)
+    master = repo.get_master()
 
     if verbose:
         print("Creating pull, kill lists")
@@ -682,14 +702,12 @@ def dat_pull(dry=False, verbose=False):
         if resolved:
             print("Resolved: " + str(resolved))
     else:
-        s3 = _s3_client(config)
-        bucket, prefix = _parse_bucket(config["aws"])
         for f in sorted(active):
             if f in pull:
                 dest_dir = os.path.dirname(f)
                 if dest_dir:
                     os.makedirs(dest_dir, exist_ok=True)
-                s3.download_file(bucket, _full_key(prefix, f), f)
+                repo.download(f)
             elif f in kill:
                 if os.path.exists(f):
                     os.remove(f)
@@ -699,11 +717,11 @@ def dat_pull(dry=False, verbose=False):
 def dat_push(dry=False, verbose=False):
     if verbose:
         print("Reading config")
-    config = read_config()
+    repo = DatRepo()
 
     if verbose:
         print("Taking inventory")
-    current = take_inventory(config)
+    current = take_inventory(repo.config)
     local = read_inventory(".dat/local")
 
     if verbose:
@@ -717,7 +735,7 @@ def dat_push(dry=False, verbose=False):
 
     if verbose:
         print("Obtaining master")
-    master = get_master(config, local)
+    master = repo.get_master(local)
 
     if verbose:
         print("Checking for conflicts")
@@ -739,13 +757,11 @@ def dat_push(dry=False, verbose=False):
         if os.path.exists(f) and any(fnmatch.fnmatch(f, pat) for pat in ignore_patterns)
     }
     if purge_ignored and not dry:
-        s3 = _s3_client(config)
-        bucket, prefix = _parse_bucket(config["aws"])
         for f in purge_ignored:
             if verbose:
                 print(f"Removing ignored file {f} from S3...")
             try:
-                s3.delete_object(Bucket=bucket, Key=_full_key(prefix, f))
+                repo.delete(f)
             except ClientError:
                 pass
     for f in purge_ignored:
@@ -763,14 +779,12 @@ def dat_push(dry=False, verbose=False):
         if dry:
             print("[Dry Run] Would have synced updated .dat/master")
         else:
-            s3 = _s3_client(config)
-            bucket, prefix = _parse_bucket(config["aws"])
             write_inventory(master, ".dat/master")
-            s3.upload_file(".dat/master", bucket, _full_key(prefix, ".dat/master"))
+            repo.upload(".dat/master")
             write_inventory(local, ".dat/local")
             os.remove(".dat/master")
-            config["pushed"] = "True"
-            write_config(config)
+            repo.config["pushed"] = "True"
+            repo.save_config()
         print("Master updated remotely, no other changes")
         sys.exit(0)
 
@@ -785,21 +799,19 @@ def dat_push(dry=False, verbose=False):
         if resolved:
             print("Resolved: " + str(resolved))
     else:
-        s3 = _s3_client(config)
-        bucket, prefix = _parse_bucket(config["aws"])
         write_inventory(master, ".dat/master")
-        s3.upload_file(".dat/master", bucket, _full_key(prefix, ".dat/master"))
+        repo.upload(".dat/master")
         for f in sorted(active & push):
-            s3.upload_file(f, bucket, _full_key(prefix, f))
+            repo.upload(f)
         for f in sorted(active & purg):
             try:
-                s3.delete_object(Bucket=bucket, Key=_full_key(prefix, f))
+                repo.delete(f)
             except ClientError:
                 pass
         write_inventory(local, ".dat/local")
         os.remove(".dat/master")
-        config["pushed"] = "True"
-        write_config(config)
+        repo.config["pushed"] = "True"
+        repo.save_config()
 
 
 def dat_pop(hard=False):
@@ -823,31 +835,26 @@ def dat_pop(hard=False):
 
 
 def dat_repair_master():
-    config = read_config()
+    repo = DatRepo()
     if os.path.isdir(".dat/remote"):
         sys.exit(
             red(".dat/remote: This directory already exists. repair-master cannot continue")
         )
 
-    s3 = _s3_client(config)
-    bucket, prefix = _parse_bucket(config["aws"])
-
     try:
-        _download_all(s3, bucket, prefix, ".dat/remote")
+        repo.download_all(".dat/remote")
     except ClientError as e:
         shutil.rmtree(".dat/remote", ignore_errors=True)
         sys.exit(red(f"Failed to download remote: {e}"))
 
     old_cwd = os.getcwd()
     os.chdir(".dat/remote")
-    master = take_inventory(config)
+    master = take_inventory(repo.config)
     write_inventory(master, ".dat/master")
     os.chdir(old_cwd)
 
     try:
-        s3.upload_file(
-            ".dat/remote/.dat/master", bucket, _full_key(prefix, ".dat/master")
-        )
+        repo.upload(".dat/remote/.dat/master", ".dat/master")
     except ClientError as e:
         sys.exit(red(f"Failed to upload master: {e}"))
     finally:
@@ -855,14 +862,14 @@ def dat_repair_master():
 
 
 def dat_stash():
-    config = read_config()
+    repo = DatRepo()
 
     if os.path.isdir(".dat/stash"):
         sys.exit("Error: Unpopped stash detected!")
 
-    current = take_inventory(config)
+    current = take_inventory(repo.config)
     local = read_inventory(".dat/local")
-    master = get_master(config)
+    master = repo.get_master()
     if len(local) == 0:
         local = current
 
@@ -880,18 +887,18 @@ def dat_stash():
 
 
 def dat_status(remote):
-    config = read_config()
-    current = take_inventory(config)
+    repo = DatRepo()
+    current = take_inventory(repo.config)
     local = read_inventory(".dat/local")
 
-    if config["pushed"] == "False":
+    if repo.config["pushed"] == "False":
         print(red("dat initialized, but never pushed"))
 
     push = needs_push(current, local)
     purg = needs_purge(current, local)
 
     if remote:
-        master = get_master(config)
+        master = repo.get_master()
         olocal = local.copy()
         omaster = master.copy()
 
@@ -955,7 +962,7 @@ def dat_status(remote):
             print(green("Local is current with remote"))
     else:
         if not local:
-            if config["pushed"] == "True":
+            if repo.config["pushed"] == "True":
                 print(red("Local dat empty; never been pulled?"))
         else:
             if push or purg:
@@ -977,15 +984,11 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         root (bool, optional): Whether to share with the root account. Defaults to False.
         verbose (bool, optional): Enable verbose output for debugging. Defaults to False.
     """
-    config = read_config()
-    if "aws" not in config:
-        raise ValueError("Bucket name not found in .dat/config.")
-    bucket_name = config["aws"].split("/")[0]
+    repo = DatRepo()
+    bucket_name = repo.bucket
 
     if verbose:
         print(f"[DEBUG] Bucket name extracted from config: {bucket_name}")
-
-    s3 = boto3.client("s3")
 
     if root:
         user_arn = f"arn:aws:iam::{account_number}:root"
@@ -1018,7 +1021,7 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         print(f"[DEBUG] Constructed policy statements: {json.dumps(statements, indent=2)}")
 
     try:
-        response = s3.get_bucket_policy(Bucket=bucket_name)
+        response = repo.s3.get_bucket_policy(Bucket=bucket_name)
         policy = json.loads(response["Policy"])
         if verbose:
             print(f"[DEBUG] Existing bucket policy retrieved:\n{json.dumps(policy, indent=2)}")
@@ -1049,7 +1052,7 @@ def dat_share(account_number, username=None, root=False, verbose=False):
         print(f"[DEBUG] Updated bucket policy to be applied:\n{json.dumps(policy, indent=2)}")
 
     try:
-        s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+        repo.s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
         print(f"Access successfully granted to {user_arn} for bucket '{bucket_name}'.")
         if verbose:
             print("[DEBUG] Bucket policy updated successfully.")

@@ -46,13 +46,31 @@ Swap `docopt` for stdlib `argparse` (subparsers). Removes one runtime dependency
 
 ## Phase 3: Testing
 
-With boto3 calls instead of shell calls, AWS can be mocked via `moto` or `unittest.mock`.
+Fully automate all existing tests. Then proceed in three steps.
 
-Target coverage:
-- Inventory functions (`read_inventory`, `write_inventory`, `take_inventory`)
-- Change detection (`needs_push`, `needs_pull`, `needs_purge`, `needs_kill`)
-- Conflict resolution (all four `resolve_*` functions) — fixture-based, already partially started
-- Push/pull logic with mocked S3 (integration-style via `moto`)
+### Step 1: Inventory functions (no mocking needed)
+
+- `read_inventory` / `write_inventory`: round-trip test, empty file, missing file
+- `take_inventory`: ignore patterns, nested subdirectories, symlinks ignored
+- `read_config` / `write_config`: round-trip, missing file calls die()
+
+### Step 2: S3 integration via moto (mock AWS)
+
+The core idea: moto intercepts boto3 calls, so you can create a fake S3 bucket in a test, populate it with objects, run dat_push/dat_pull, and assert on the resulting bucket/local state — all without a real AWS account.
+
+- `dat_push`: set up a fake bucket + local files + inventories, run push, assert correct objects uploaded/deleted
+- `dat_pull`: populate fake bucket, run pull, assert correct files created/removed locally
+- `dat_checkin` / `dat_checkout`: simpler single-file versions of push/pull
+- `dat_status`: assert output lines match expected state
+- `DatRepo.get_master`: 404 path (never pushed), happy path, credential error path
+
+### Step 3: End-to-end command dispatch
+
+- `dat_init`: verify .dat/ directory and config created correctly
+- `dat_clone`: fake bucket → local directory created with right files
+- `dat_delete`: verify bucket objects and .dat/ removed
+
+The moto tests will use a shared pytest.fixture that spins up a fake S3 bucket, writes `.dat/config` pointing at it, and tears down after each test. A separate fixture would create a known local file tree + inventory state to test push/pull against.
 
 ---
 

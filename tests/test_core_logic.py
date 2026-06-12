@@ -23,7 +23,7 @@ OBJ = Path(__file__).resolve().parent / "obj"
 @pytest.fixture(scope="module")
 def inventories():
     current = take_inventory({}, root=OBJ / "1")
-    local   = read_inventory(OBJ / "1" / ".dat" / "local")
+    local   = read_inventory(OBJ / "local.txt")
     master  = take_inventory({}, root=OBJ / "2")
     return current, local, master
 

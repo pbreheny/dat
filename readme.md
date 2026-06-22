@@ -12,7 +12,7 @@ The basic logic behind `dat` is that it tracks the [md5](https://en.wikipedia.or
 pip install git+https://github.com/pbreheny/dat
 ```
 
-`dat` also requires that the [AWS command-line interface](https://aws.amazon.com/cli/) is installed on your system.
+`dat` requires an AWS account with S3 access. Credentials can be configured via environment variables, `~/.aws/credentials`, or any other method supported by `boto3`.
 
 ## Basic usage
 
@@ -23,67 +23,49 @@ dat init
 dat push
 ```
 
-By default, this will create a bucket called `username.path.to.dir`. For example, if your username is jsmith7 and your `dat` directory is `HOME/pdf/articles`, the default bucket name is `jsmith7.pdf.artcles`. Alternatively, you can run `dat init <bucket>` and specify your own bucket name. In particular, you can specify something like `jsmith7.pdf/articles` if the bucket `jsmith7.pdf` already exists and you want the `articles` folder on your local machine to mirror the `articles` subdirectory of that bucket.
+By default, this will create a bucket called `username.path.to.dir`. For example, if your username is `jsmith7` and your `dat` directory is `HOME/pdf/articles`, the default bucket name is `jsmith7.pdf.articles`. Alternatively, you can run `dat init <bucket>` to specify your own bucket name. You can also use something like `jsmith7.pdf/articles` if the bucket `jsmith7.pdf` already exists and you want the `articles` folder to mirror the `articles` subdirectory of that bucket.
 
-If you are on a different machine (still with username `jsmith7`) and go to the `pdf` folder, you can then run
+To clone the repository on a new machine:
 
 ```bash
-dat clone articles
+dat clone jsmith7.pdf.articles articles
 ```
 
-to clone the repository on the new machine. Alternatively, `dat clone <bucket> <folder>` allows you to clone an arbitrary bucket into an arbitrary folder.
+The first argument is the bucket name; the second is the local folder name (defaults to the bucket name if omitted).
 
-To pull changes from the master bucket,
+To pull changes from the remote:
 
 ```bash
 dat pull
 ```
 
-To check if any local files need pushing (can be done offline, doesn't require AWS connection)
+To check if any local files need pushing (offline, no AWS connection needed):
 
 ```bash
 dat status
 ```
 
-To check against the remote to see if anything needs pushing or pulling
+To check against the remote to see if anything needs pushing or pulling:
 
 ```bash
-dat -r status
+dat status -r
 ```
 
-## AWS permissions
+## Sharing a bucket with another AWS account
 
-When using `dat` to share a repository between AWS accounts, be aware that in addition to S3 `GetObject` permissions on the objects in the bucket, you also need to grant `ListBucket` permissions for `dat` to work because `aws s3 sync` needs to list all the objects in the bucket to determine which files need to be copied over.
+To grant another AWS user access to your bucket:
 
-Specifically, your S3 bucket policy statement needs to look something like this:
+```bash
+dat share <account_number> <username>
+```
 
-``` json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": "arn:aws:iam::123456789101:user/Username"
-            },
-            "Action": "s3:*",
-            "Resource": "arn:aws:s3:::my.s3.bucket/*"
-        },
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": "arn:aws:iam::123456789101:user/Username"
-            },
-            "Action": "s3:ListBucket",
-            "Resource": "arn:aws:s3:::my.s3.bucket"
-        }
-    ]
-}
+This updates the bucket policy to grant the specified IAM user `GetObject`, `PutObject`, `DeleteObject`, and `ListBucket` permissions. To share with the root of an account instead of a specific IAM user:
+
+```bash
+dat share <account_number> --root
 ```
 
 ## To do
 
 * Need better tools for resolving conflicts, like `ours` / `theirs` in `git`
-* Should institute some sort of lock so that two operations can't do `dat` things at the same time.
-* Limited testing by users other than me
-* Currently specific to AWS, would be neat if it worked with, say, Google Drive as well.
+* Should institute some sort of lock to prevent concurrent `dat` operations

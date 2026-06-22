@@ -187,6 +187,7 @@ def _download_all(s3, bucket, prefix, dest_dir):
 class DatRepo:
     def __init__(self, config_path=_CONFIG):
         self.config = read_config(config_path)
+        config_repair(self.config, config_path)
         try:
             if "profile" in self.config:
                 session = boto3.Session(profile_name=self.config["profile"])
@@ -254,12 +255,14 @@ class DatRepo:
 # Inventory
 # ---------------------------------------------------------------------------
 
-def _iter_files(root):
+def _iter_files(root, symlinks="follow"):
     """Yield all files under root, skipping .dat and .git directories."""
     for item in root.iterdir():
+        if symlinks == "ignore" and item.is_symlink():
+            continue
         if item.is_dir():
             if item.name not in (".dat", ".git"):
-                yield from _iter_files(item)
+                yield from _iter_files(item, symlinks=symlinks)
         elif item.is_file():
             yield item
 
@@ -278,8 +281,9 @@ def read_ignore_patterns(ignore_file=_IGNORE):
 def take_inventory(config, root=None):
     root = Path(root) if root is not None else Path(".")
     ignore_patterns = read_ignore_patterns(root / ".dat" / "ignore")
+    symlinks = config.get("symlinks", "follow")
     out = {}
-    for path in _iter_files(root):
+    for path in _iter_files(root, symlinks=symlinks):
         f = str(path.relative_to(root))
         if any(fnmatch.fnmatch(f, pattern) for pattern in ignore_patterns):
             continue
@@ -350,6 +354,35 @@ def write_config(config, filename=_CONFIG):
     with open(filename, "w") as f:
         for k in sorted(config.keys()):
             f.write(f"{k}: {config[k]}\n")
+
+
+def _repo_has_symlinks(root=None):
+    root = Path(".") if root is None else Path(root)
+    for item in root.iterdir():
+        if item.is_symlink():
+            return True
+        if item.is_dir(follow_symlinks=False) and item.name not in (".dat", ".git"):
+            if _repo_has_symlinks(item):
+                return True
+    return False
+
+
+def config_repair(config, config_path):
+    """Add any keys missing from an older config, writing the file if changed."""
+    changed = False
+    if "hash" not in config:
+        config["hash"] = "md5"
+        changed = True
+    if "symlinks" not in config:
+        if _repo_has_symlinks():
+            config["symlinks"] = "follow"
+            print("Note: updated config (symlinks: follow — existing symlinks detected)")
+        else:
+            config["symlinks"] = "ignore"
+            print("Note: updated config (symlinks: ignore)")
+        changed = True
+    if changed:
+        write_config(config, config_path)
 
 
 def get_aws_region(profile=None):
@@ -559,7 +592,7 @@ def dat_clone(bucket, folder, profile=None):
         shutil.rmtree(folder_path, ignore_errors=True)
         die(f"Failed to clone repository: {e}")
 
-    config = {"aws": bucket, "pushed": "True"}
+    config = {"aws": bucket, "hash": "md5", "pushed": "True", "symlinks": "ignore"}
     if profile is not None:
         config["profile"] = profile
     write_config(config, folder_path / ".dat" / "config")
@@ -603,7 +636,7 @@ def dat_init(id, profile):
         username = getpass.getuser()
         id = f"{username}.{str(Path.cwd()).replace(str(Path.home()), '').strip('/').replace('/', '.').lower()}"
 
-    config = {"aws": id, "pushed": "False"}
+    config = {"aws": id, "hash": "md5", "pushed": "False", "symlinks": "ignore"}
     if profile is not None:
         config["profile"] = profile
         print(green(f"Configured for profile={profile} aws bucket: ") + id)

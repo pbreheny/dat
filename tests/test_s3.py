@@ -96,7 +96,7 @@ def repo_dir(tmp_path, monkeypatch, s3):
     monkeypatch.chdir(tmp_path)
     dat_dir = tmp_path / ".dat"
     dat_dir.mkdir()
-    write_config({"aws": BUCKET, "pushed": "True"}, dat_dir / "config")
+    write_config({"aws": BUCKET, "hash": "md5", "pushed": "True", "symlinks": "ignore"}, dat_dir / "config")
     return tmp_path
 
 
@@ -118,7 +118,7 @@ class TestGetMaster:
         fresh = "brand-new-bucket"
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".dat").mkdir()
-        write_config({"aws": fresh, "pushed": "False"}, tmp_path / ".dat" / "config")
+        write_config({"aws": fresh, "hash": "md5", "pushed": "False", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
         local = {"a.txt": "abc123"}
 
         # Patch get_aws_region → None so create_bucket uses no LocationConstraint.
@@ -135,7 +135,7 @@ class TestGetMaster:
         """404 + pushed==False + local=None → die with helpful message."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".dat").mkdir()
-        write_config({"aws": BUCKET, "pushed": "False"}, tmp_path / ".dat" / "config")
+        write_config({"aws": BUCKET, "hash": "md5", "pushed": "False", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
 
         repo = DatRepo()
         with pytest.raises(SystemExit):
@@ -145,7 +145,7 @@ class TestGetMaster:
         """NoCredentialsError during client construction causes sys.exit."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".dat").mkdir()
-        write_config({"aws": BUCKET, "pushed": "True"}, tmp_path / ".dat" / "config")
+        write_config({"aws": BUCKET, "hash": "md5", "pushed": "True", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
 
         from botocore.exceptions import NoCredentialsError
 
@@ -216,7 +216,7 @@ class TestDatPush:
         fresh = "brand-new-bucket-push"
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".dat").mkdir()
-        write_config({"aws": fresh, "pushed": "False"}, tmp_path / ".dat" / "config")
+        write_config({"aws": fresh, "hash": "md5", "pushed": "False", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
         make_file("hello.txt", b"hello")
         write_inventory({}, tmp_path / ".dat" / "local")
         monkeypatch.setattr(dat_module, "get_aws_region", lambda profile=None: None)
@@ -379,6 +379,8 @@ class TestDatInit:
         config = read_config(tmp_path / ".dat" / "config")
         assert config["aws"] == "my-bucket"
         assert config["pushed"] == "False"
+        assert config["hash"] == "md5"
+        assert config["symlinks"] == "ignore"
 
     def test_creates_ignore_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -476,7 +478,7 @@ class TestDatDelete:
         """When aws contains a prefix (/), skip S3 deletion and only remove .dat/."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".dat").mkdir()
-        write_config({"aws": f"{BUCKET}/subdir", "pushed": "True"}, tmp_path / ".dat" / "config")
+        write_config({"aws": f"{BUCKET}/subdir", "hash": "md5", "pushed": "True", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
         put_s3_file(s3, "subdir/data.txt", b"data")
 
         dat_delete()
@@ -489,3 +491,99 @@ class TestDatDelete:
 
         with pytest.raises(SystemExit):
             dat_delete()
+
+
+# ---------------------------------------------------------------------------
+# config_repair
+# ---------------------------------------------------------------------------
+
+class TestConfigRepair:
+    def test_adds_hash_and_symlinks_to_old_config(self, tmp_path, monkeypatch, s3):
+        """A repo with no hash/symlinks keys gets them added on first DatRepo use."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+        write_config({"aws": BUCKET, "pushed": "True"}, tmp_path / ".dat" / "config")
+
+        DatRepo()
+
+        config = read_config(tmp_path / ".dat" / "config")
+        assert config["hash"] == "md5"
+        assert config["symlinks"] == "ignore"
+
+    def test_symlinks_follow_when_symlinks_exist(self, tmp_path, monkeypatch, s3):
+        """If the repo has symlinks, repair sets symlinks: follow for compatibility."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+        write_config({"aws": BUCKET, "pushed": "True"}, tmp_path / ".dat" / "config")
+        target = tmp_path / "real.txt"
+        target.write_bytes(b"data")
+        (tmp_path / "link.txt").symlink_to(target)
+
+        DatRepo()
+
+        config = read_config(tmp_path / ".dat" / "config")
+        assert config["symlinks"] == "follow"
+
+    def test_repair_is_idempotent(self, tmp_path, monkeypatch, s3):
+        """Running DatRepo twice does not change an already-repaired config."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+        write_config({"aws": BUCKET, "pushed": "True"}, tmp_path / ".dat" / "config")
+
+        DatRepo()
+        mtime_after_first = (tmp_path / ".dat" / "config").stat().st_mtime
+        DatRepo()
+        mtime_after_second = (tmp_path / ".dat" / "config").stat().st_mtime
+
+        assert mtime_after_first == mtime_after_second
+
+
+# ---------------------------------------------------------------------------
+# symlink handling in take_inventory
+# ---------------------------------------------------------------------------
+
+class TestSymlinks:
+    def test_ignore_skips_symlinked_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "real.txt"
+        target.write_bytes(b"data")
+        (tmp_path / "link.txt").symlink_to(target)
+
+        inv = dat_module.take_inventory({"symlinks": "ignore"}, root=tmp_path)
+
+        assert "real.txt" in inv
+        assert "link.txt" not in inv
+
+    def test_ignore_skips_symlinked_directory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        (real_dir / "file.txt").write_bytes(b"data")
+        (tmp_path / "linked_dir").symlink_to(real_dir)
+
+        inv = dat_module.take_inventory({"symlinks": "ignore"}, root=tmp_path)
+
+        assert "real_dir/file.txt" in inv
+        assert "linked_dir/file.txt" not in inv
+
+    def test_follow_includes_symlinked_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "real.txt"
+        target.write_bytes(b"data")
+        (tmp_path / "link.txt").symlink_to(target)
+
+        inv = dat_module.take_inventory({"symlinks": "follow"}, root=tmp_path)
+
+        assert "real.txt" in inv
+        assert "link.txt" in inv
+
+    def test_follow_includes_symlinked_directory_contents(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        (real_dir / "file.txt").write_bytes(b"data")
+        (tmp_path / "linked_dir").symlink_to(real_dir)
+
+        inv = dat_module.take_inventory({"symlinks": "follow"}, root=tmp_path)
+
+        assert "linked_dir/file.txt" in inv

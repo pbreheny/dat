@@ -64,8 +64,3 @@ This updates the bucket policy to grant the specified IAM user `GetObject`, `Put
 ```bash
 dat share <account_number> --root
 ```
-
-## To do
-
-* Need better tools for resolving conflicts, like `ours` / `theirs` in `git`
-* Should institute some sort of lock to prevent concurrent `dat` operations

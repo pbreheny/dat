@@ -225,7 +225,7 @@ class DatRepo:
             _MASTER.unlink()
         except ClientError as e:
             code = e.response["Error"]["Code"]
-            if code in ("404", "NoSuchKey"):
+            if code in ("404", "NoSuchKey", "NoSuchBucket"):
                 if self.config.get("pushed") == "False":
                     if local is None:
                         die("Repository has never been pushed; run 'dat push' first")

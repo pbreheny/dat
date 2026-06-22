@@ -15,5 +15,6 @@ dat = "dat:dat"
 [project.optional-dependencies]
 test = [
     "pytest",
+    "moto[s3]",
 ]
 

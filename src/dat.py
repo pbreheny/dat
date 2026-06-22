@@ -13,7 +13,6 @@ import json
 import shutil
 import hashlib
 import getpass
-import platform
 import subprocess
 import textwrap
 import fnmatch
@@ -52,7 +51,7 @@ def dat():
     p.add_argument("file")
 
     p = sub.add_parser("clone", help="clone a remote dat repository")
-    p.add_argument("bucket", help="source bucket or hpc:id")
+    p.add_argument("bucket", help="S3 bucket name or bucket/prefix")
     p.add_argument("folder", nargs="?", help="local folder name (defaults to bucket name)")
     p.add_argument("--profile", metavar="PROFILE", help="AWS CLI profile")
 
@@ -539,53 +538,28 @@ def dat_checkout(filename):
 def dat_clone(bucket, folder, profile=None):
     if folder is None:
         folder = bucket
-    if ":" not in bucket:
-        loc = "aws"
-        id = bucket
-    else:
-        [loc, id] = bucket.split(":")
 
     folder_path = Path(folder)
     if folder_path.is_dir():
         die(f'Directory "{folder}" already exists')
     folder_path.mkdir()
 
-    err = 0
-    if loc == "aws":
-        session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-        try:
-            session.client("sts").get_caller_identity()
-        except ClientError:
-            err = 1
-            print(red("You are not currently logged into AWS"))
-
-        if not err:
-            s3 = session.client("s3")
-            b, prefix = _parse_bucket(id)
-            try:
-                _download_all(s3, b, prefix, folder_path)
-            except ClientError as e:
-                err = 1
-                print(red(f"Failed to clone repository: {e}"))
-    elif loc == "hpc":
-        if "argon" in platform.node():
-            hub = "/Shared/Fisher/hub/"
-        elif (Path.home() / "lss").is_dir():
-            hub = str(Path.home() / "lss" / "Fisher" / "hub") + "/"
-        else:
-            hub = "hpc-data:/Shared/Fisher/hub/"
-        result = subprocess.run(["rsync", "-avz", hub + id + "/", folder + "/"])
-        err = result.returncode
-    else:
-        err = 1
-        print("Error: Central location must be of form aws:id or hpc:id")
-
-    if err:
+    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+    try:
+        session.client("sts").get_caller_identity()
+    except ClientError:
         shutil.rmtree(folder_path, ignore_errors=True)
-        sys.exit(1)
+        die("You are not currently logged into AWS")
 
-    config = {"pushed": "True"}
-    config[loc] = id
+    s3 = session.client("s3")
+    b, prefix = _parse_bucket(bucket)
+    try:
+        _download_all(s3, b, prefix, folder_path)
+    except ClientError as e:
+        shutil.rmtree(folder_path, ignore_errors=True)
+        die(f"Failed to clone repository: {e}")
+
+    config = {"aws": bucket, "pushed": "True"}
     if profile is not None:
         config["profile"] = profile
     write_config(config, folder_path / ".dat" / "config")

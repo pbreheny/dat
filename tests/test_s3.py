@@ -23,6 +23,9 @@ from dat import (
     DatRepo,
     dat_checkin,
     dat_checkout,
+    dat_clone,
+    dat_delete,
+    dat_init,
     dat_push,
     dat_pull,
     dat_status,
@@ -361,3 +364,128 @@ class TestDatStatus:
         dat_status(remote=True)
 
         assert "current" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# dat_init
+# ---------------------------------------------------------------------------
+
+class TestDatInit:
+    def test_creates_dat_dir_and_config(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        dat_init("my-bucket", profile=None)
+
+        config = read_config(tmp_path / ".dat" / "config")
+        assert config["aws"] == "my-bucket"
+        assert config["pushed"] == "False"
+
+    def test_creates_ignore_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        dat_init("my-bucket", profile=None)
+
+        ignore = (tmp_path / ".dat" / "ignore").read_text()
+        assert ".DS_Store" in ignore
+
+    def test_stores_profile_in_config(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        dat_init("my-bucket", profile="my-profile")
+
+        config = read_config(tmp_path / ".dat" / "config")
+        assert config["profile"] == "my-profile"
+
+    def test_autogenerates_bucket_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("getpass.getuser", lambda: "testuser")
+
+        dat_init(None, profile=None)
+
+        config = read_config(tmp_path / ".dat" / "config")
+        assert config["aws"].startswith("testuser.")
+
+    def test_fails_if_dat_dir_exists(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+
+        with pytest.raises(SystemExit):
+            dat_init("my-bucket", profile=None)
+
+
+# ---------------------------------------------------------------------------
+# dat_clone
+# ---------------------------------------------------------------------------
+
+class TestDatClone:
+    def test_downloads_files_and_writes_config(self, tmp_path, monkeypatch, s3):
+        monkeypatch.chdir(tmp_path)
+        content = b"dataset content"
+        h = _md5(content)
+        put_s3_file(s3, "data.csv", content)
+        put_master(s3, {"data.csv": h})
+
+        dat_clone(BUCKET, "cloned")
+
+        assert (tmp_path / "cloned" / "data.csv").read_bytes() == content
+        config = read_config(tmp_path / "cloned" / ".dat" / "config")
+        assert config["aws"] == BUCKET
+        assert config["pushed"] == "True"
+
+    def test_master_renamed_to_local(self, tmp_path, monkeypatch, s3):
+        monkeypatch.chdir(tmp_path)
+        put_master(s3, {"a.txt": "abc"})
+
+        dat_clone(BUCKET, "cloned")
+
+        assert (tmp_path / "cloned" / ".dat" / "local").is_file()
+        assert not (tmp_path / "cloned" / ".dat" / "master").exists()
+
+    def test_folder_defaults_to_bucket_name(self, tmp_path, monkeypatch, s3):
+        monkeypatch.chdir(tmp_path)
+        put_master(s3, {})
+
+        dat_clone(BUCKET, None)
+
+        assert (tmp_path / BUCKET).is_dir()
+
+    def test_fails_if_folder_exists(self, tmp_path, monkeypatch, s3):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "existing").mkdir()
+
+        with pytest.raises(SystemExit):
+            dat_clone(BUCKET, "existing")
+
+
+# ---------------------------------------------------------------------------
+# dat_delete
+# ---------------------------------------------------------------------------
+
+class TestDatDelete:
+    def test_deletes_bucket_and_dat_dir(self, repo_dir, s3):
+        put_s3_file(s3, "data.txt", b"some data")
+        put_master(s3, {"data.txt": _md5(b"some data")})
+
+        dat_delete()
+
+        all_buckets = {b["Name"] for b in s3.list_buckets()["Buckets"]}
+        assert BUCKET not in all_buckets
+        assert not (repo_dir / ".dat").exists()
+
+    def test_prefix_config_only_removes_dat_dir(self, tmp_path, monkeypatch, s3):
+        """When aws contains a prefix (/), skip S3 deletion and only remove .dat/."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+        write_config({"aws": f"{BUCKET}/subdir", "pushed": "True"}, tmp_path / ".dat" / "config")
+        put_s3_file(s3, "subdir/data.txt", b"data")
+
+        dat_delete()
+
+        assert not (tmp_path / ".dat").exists()
+        assert "subdir/data.txt" in bucket_keys(s3)
+
+    def test_fails_if_bucket_missing(self, repo_dir, s3):
+        s3.delete_bucket(Bucket=BUCKET)
+
+        with pytest.raises(SystemExit):
+            dat_delete()

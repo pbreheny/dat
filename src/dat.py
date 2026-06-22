@@ -379,7 +379,7 @@ def _repo_has_symlinks(root=None):
     for item in root.iterdir():
         if item.is_symlink():
             return True
-        if item.is_dir(follow_symlinks=False) and item.name not in (".dat", ".git"):
+        if item.is_dir() and item.name not in (".dat", ".git"):
             if _repo_has_symlinks(item):
                 return True
     return False

@@ -278,6 +278,24 @@ def read_ignore_patterns(ignore_file=_IGNORE):
     return patterns
 
 
+def _is_ignored(f, patterns):
+    """Return True if f should be ignored given an ordered list of patterns.
+
+    Patterns are evaluated in order; last match wins.  A bare name or path
+    matches both itself and everything beneath it (e.g. 'data' also matches
+    'data/file.txt').  Prefix a pattern with '!' to negate a prior match.
+    """
+    ignored = False
+    for pattern in patterns:
+        if pattern.startswith("!"):
+            if fnmatch.fnmatch(f, pattern[1:]):
+                ignored = False
+        else:
+            if fnmatch.fnmatch(f, pattern) or fnmatch.fnmatch(f, pattern + "/*"):
+                ignored = True
+    return ignored
+
+
 def take_inventory(config, root=None):
     root = Path(root) if root is not None else Path(".")
     ignore_patterns = read_ignore_patterns(root / ".dat" / "ignore")
@@ -285,7 +303,7 @@ def take_inventory(config, root=None):
     out = {}
     for path in _iter_files(root, symlinks=symlinks):
         f = str(path.relative_to(root))
-        if any(fnmatch.fnmatch(f, pattern) for pattern in ignore_patterns):
+        if _is_ignored(f, ignore_patterns):
             continue
         out[f] = md5(path)
     return out
@@ -792,7 +810,7 @@ def dat_push(dry=False, verbose=False):
     ignore_patterns = read_ignore_patterns()
     purge_ignored = {
         f for f in purg
-        if Path(f).exists() and any(fnmatch.fnmatch(f, pat) for pat in ignore_patterns)
+        if Path(f).exists() and _is_ignored(f, ignore_patterns)
     }
     if purge_ignored and not dry:
         for f in purge_ignored:

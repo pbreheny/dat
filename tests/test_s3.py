@@ -28,6 +28,7 @@ from dat import (
     dat_init,
     dat_push,
     dat_pull,
+    dat_rehash,
     dat_status,
     read_config,
     read_inventory,
@@ -379,7 +380,7 @@ class TestDatInit:
         config = read_config(tmp_path / ".dat" / "config")
         assert config["aws"] == "my-bucket"
         assert config["pushed"] == "False"
-        assert config["hash"] == "md5"
+        assert config["hash"] == "xxh3_64"  # xxhash is installed → default is xxh3_64
         assert config["symlinks"] == "ignore"
 
     def test_creates_ignore_file(self, tmp_path, monkeypatch):
@@ -457,6 +458,28 @@ class TestDatClone:
 
         with pytest.raises(SystemExit):
             dat_clone(BUCKET, "existing")
+
+    def test_inherits_hash_from_remote_config(self, tmp_path, monkeypatch, s3):
+        """Clone picks up the remote repo's hash algorithm."""
+        monkeypatch.chdir(tmp_path)
+        remote_cfg = "aws: test-dat-bucket\nhash: xxh3_64\npushed: True\nsymlinks: ignore\n"
+        s3.put_object(Bucket=BUCKET, Key=".dat/config", Body=remote_cfg.encode())
+        put_master(s3, {})
+
+        dat_clone(BUCKET, "cloned")
+
+        config = read_config(tmp_path / "cloned" / ".dat" / "config")
+        assert config["hash"] == "xxh3_64"
+
+    def test_falls_back_to_md5_when_no_remote_config(self, tmp_path, monkeypatch, s3):
+        """Clone defaults to md5 when the remote has no .dat/config (old repo)."""
+        monkeypatch.chdir(tmp_path)
+        put_master(s3, {})
+
+        dat_clone(BUCKET, "cloned")
+
+        config = read_config(tmp_path / "cloned" / ".dat" / "config")
+        assert config["hash"] == "md5"
 
 
 # ---------------------------------------------------------------------------
@@ -587,3 +610,104 @@ class TestSymlinks:
         inv = dat_module.take_inventory({"symlinks": "follow"}, root=tmp_path)
 
         assert "linked_dir/file.txt" in inv
+
+
+# ---------------------------------------------------------------------------
+# dat_rehash
+# ---------------------------------------------------------------------------
+
+def _xxh3_64(content: bytes) -> str:
+    import xxhash
+    return xxhash.xxh3_64(content).hexdigest()
+
+
+class TestDatRehash:
+    def _clean_repo(self, repo_dir, s3, content=b"test data"):
+        """Set up a clean md5 repo with one file pushed."""
+        h = make_file("data.txt", content)
+        write_inventory({"data.txt": h}, repo_dir / ".dat" / "local")
+        put_master(s3, {"data.txt": h})
+        return h
+
+    def test_converts_md5_to_xxh3_64(self, repo_dir, s3, monkeypatch):
+        content = b"test data"
+        self._clean_repo(repo_dir, s3, content)
+        monkeypatch.setattr("builtins.input", lambda _: "")  # press enter = y
+
+        dat_rehash("xxh3_64")
+
+        config = read_config(repo_dir / ".dat" / "config")
+        assert config["hash"] == "xxh3_64"
+        local = read_inventory()
+        assert local["data.txt"] == _xxh3_64(content)
+        # Verify master on S3 was updated
+        resp = s3.get_object(Bucket=BUCKET, Key=".dat/master")
+        lines = resp["Body"].read().decode().strip().split("\n")
+        for line in lines:
+            _, digest = line.split("\t")
+            assert len(digest) == 16  # xxh3_64 hex is 16 chars
+
+    def test_xxhash_alias_normalizes_to_xxh3_64(self, repo_dir, s3, monkeypatch):
+        self._clean_repo(repo_dir, s3)
+        monkeypatch.setattr("builtins.input", lambda _: "")
+
+        dat_rehash("xxhash")
+
+        config = read_config(repo_dir / ".dat" / "config")
+        assert config["hash"] == "xxh3_64"
+
+    def test_no_op_when_already_on_target_algo(self, repo_dir, s3, capsys):
+        dat_rehash("md5")  # repo_dir is already md5
+
+        assert "nothing to do" in capsys.readouterr().out
+        config = read_config(repo_dir / ".dat" / "config")
+        assert config["hash"] == "md5"
+
+    def test_aborts_if_push_needed(self, repo_dir, s3):
+        make_file("new.txt", b"unpushed file")
+        write_inventory({}, repo_dir / ".dat" / "local")
+        put_master(s3, {})
+
+        with pytest.raises(SystemExit):
+            dat_rehash("xxh3_64")
+
+    def test_aborts_if_purge_needed(self, repo_dir, s3):
+        # b.txt tracked in local but deleted from disk
+        h = make_file("a.txt", b"a")
+        write_inventory({"a.txt": h, "b.txt": "oldhash"}, repo_dir / ".dat" / "local")
+        put_master(s3, {"a.txt": h, "b.txt": "oldhash"})
+
+        with pytest.raises(SystemExit):
+            dat_rehash("xxh3_64")
+
+    def test_dry_run_makes_no_changes(self, repo_dir, s3, capsys):
+        content = b"data"
+        self._clean_repo(repo_dir, s3, content)
+
+        dat_rehash("xxh3_64", dry=True)
+
+        config = read_config(repo_dir / ".dat" / "config")
+        assert config["hash"] == "md5"
+        local = read_inventory()
+        assert local["data.txt"] == _md5(content)
+        assert "Would rehash" in capsys.readouterr().out
+
+    def test_dry_run_notes_unsynced_remote_changes(self, repo_dir, s3, capsys):
+        content = b"data"
+        h = make_file("a.txt", content)
+        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local")
+        # Master has a new file that local doesn't know about
+        put_master(s3, {"a.txt": h, "b.txt": "remotehash"})
+
+        dat_rehash("xxh3_64", dry=True)
+
+        out = capsys.readouterr().out
+        assert "remote has unsynced changes" in out
+        assert "Would rehash" in out
+
+    def test_aborts_if_user_declines_confirmation(self, repo_dir, s3, monkeypatch):
+        self._clean_repo(repo_dir, s3)
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+
+        with pytest.raises(SystemExit):
+            dat_rehash("xxh3_64")

@@ -82,6 +82,16 @@ def dat():
     sub.add_parser("overwrite-master", help="overwrite remote with local copy")
     sub.add_parser("repair-master", help="repair corrupted remote master inventory")
 
+    p = sub.add_parser("rehash", help="convert repository to a different hash algorithm")
+    p.add_argument(
+        "algo",
+        nargs="?",
+        default="xxh3_64",
+        choices=["md5", "xxhash", "xxh3_64"],
+        help="hash algorithm (default: xxh3_64)",
+    )
+    p.add_argument("-d", action="store_true", help="dry run")
+
     p = sub.add_parser("share", help="share bucket with another AWS account")
     p.add_argument("account_number", help="AWS account number")
     p.add_argument("username", nargs="?", help="IAM username (omit with --root)")
@@ -115,6 +125,8 @@ def dat():
         dat_overwrite_master()
     elif arg.command == "repair-master":
         dat_repair_master()
+    elif arg.command == "rehash":
+        dat_rehash(arg.algo, arg.d)
     elif arg.command == "share":
         dat_share(arg.account_number, arg.username, root=arg.root, verbose=arg.v)
 
@@ -153,7 +165,7 @@ def _hash_md5(fname):
 
 def _hash_xxh3_64(fname):
     if not _XXHASH_AVAILABLE:
-        die("xxhash is not installed; run: pip install dat[fast]")
+        die("xxhash is not installed; run: pip install xxhash")
     h = _xxhash.xxh3_64()
     with open(fname, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
@@ -903,6 +915,82 @@ def dat_push(dry=False, verbose=False):
         _MASTER.unlink()
         repo.config["pushed"] = "True"
         repo.save_config()
+
+
+def dat_rehash(algo="xxh3_64", dry=False):
+    if algo == "xxhash":
+        algo = "xxh3_64"
+
+    repo = DatRepo()
+    current_algo = repo.config.get("hash", "md5")
+
+    if algo == current_algo:
+        print(f"Already using {algo}; nothing to do.")
+        return
+
+    # Check for unpushed/unpurged local changes before anything else
+    current = take_inventory(repo.config)
+    local = read_inventory()
+    push = needs_push(current, local)
+    purge = needs_purge(current, local)
+    if push or purge:
+        items = sorted(push | purge)
+        die("Local changes have not been pushed; run 'dat push' first:\n  " + "\n  ".join(items))
+
+    # Check for remote changes
+    master = repo.get_master()
+    pull = needs_pull(master, local)
+    kill = needs_kill(master, local)
+
+    if dry:
+        if pull or kill:
+            print("Note: remote has unsynced changes; run 'dat pull' first before rehashing.")
+        print(f"Would rehash {len(current)} files from {current_algo} to {algo} and update the remote master.")
+        return
+
+    if pull or kill:
+        confirm = input("There are remote changes. Run 'dat pull' first (recommended)? [Y/n]: ").strip().lower()
+        if confirm in ("", "y"):
+            try:
+                dat_pull()
+            except SystemExit as e:
+                if e.code != 0:
+                    sys.exit(e.code)
+            local = read_inventory()
+            remaining = needs_pull(master, local) | needs_kill(master, local)
+            if remaining:
+                die("Pull did not complete (conflicts?). Resolve issues before rehashing.")
+        else:
+            die("Cannot rehash with unsynced remote changes. Run 'dat pull' first.")
+
+    n = len(local)
+    print(f"\nThis will rehash all {n} files using {algo} and update the remote master.")
+    print("Collaborators will need to run 'dat rehash' before their next pull.")
+    confirm = input("Proceed? [Y/n]: ").strip().lower()
+    if confirm not in ("", "y"):
+        die("Aborted.")
+
+    # Rehash with new algorithm
+    repo.config["hash"] = algo
+    new_hashes = take_inventory(repo.config)
+
+    missing = set(master.keys()) - set(new_hashes.keys())
+    if missing:
+        repo.config["hash"] = current_algo
+        die("Cannot rehash: files in master are missing locally:\n  " + "\n  ".join(sorted(missing)))
+
+    new_master = {f: new_hashes[f] for f in master}
+
+    try:
+        write_inventory(new_master, _MASTER)
+        repo.upload(_MASTER)
+        write_config(repo.config, _CONFIG)
+        write_inventory(new_hashes, _LOCAL)
+        _MASTER.unlink()
+    except ClientError as e:
+        die(f"Failed to upload new master: {e}")
+
+    print(f"Done. Rehashed {n} files; remote master and local inventory updated.")
 
 
 def dat_pop(hard=False):

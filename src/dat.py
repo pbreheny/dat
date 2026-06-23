@@ -20,6 +20,12 @@ from pathlib import Path
 from botocore.exceptions import ClientError, CredentialRetrievalError, NoCredentialsError
 import argparse
 
+try:
+    import xxhash as _xxhash
+    _XXHASH_AVAILABLE = True
+except ImportError:
+    _XXHASH_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Path constants
 # ---------------------------------------------------------------------------
@@ -137,12 +143,31 @@ def die(msg):
 # Hashing
 # ---------------------------------------------------------------------------
 
-def md5(fname):
-    hash_md5 = hashlib.md5()
+def _hash_md5(fname):
+    h = hashlib.md5()
     with open(fname, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _hash_xxh3_64(fname):
+    if not _XXHASH_AVAILABLE:
+        die("xxhash is not installed; run: pip install dat[fast]")
+    h = _xxhash.xxh3_64()
+    with open(fname, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def hash_file(fname, algorithm):
+    if algorithm == "md5":
+        return _hash_md5(fname)
+    elif algorithm == "xxh3_64":
+        return _hash_xxh3_64(fname)
+    else:
+        die(f"Unknown hash algorithm: {algorithm}")
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +330,7 @@ def take_inventory(config, root=None):
         f = str(path.relative_to(root))
         if _is_ignored(f, ignore_patterns):
             continue
-        out[f] = md5(path)
+        out[f] = hash_file(path, config.get("hash", "md5"))
     return out
 
 
@@ -610,10 +635,19 @@ def dat_clone(bucket, folder, profile=None):
         shutil.rmtree(folder_path, ignore_errors=True)
         die(f"Failed to clone repository: {e}")
 
-    config = {"aws": bucket, "hash": "md5", "pushed": "True", "symlinks": "ignore"}
+    remote_config_path = folder_path / ".dat" / "config"
+    remote_config = {}
+    if remote_config_path.is_file():
+        for line in remote_config_path.read_text().splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                remote_config[k.strip()] = v.strip()
+    hash_algo = remote_config.get("hash", "md5")
+
+    config = {"aws": bucket, "hash": hash_algo, "pushed": "True", "symlinks": "ignore"}
     if profile is not None:
         config["profile"] = profile
-    write_config(config, folder_path / ".dat" / "config")
+    write_config(config, remote_config_path)
 
     master_file = folder_path / ".dat" / "master"
     if master_file.is_file():
@@ -654,7 +688,8 @@ def dat_init(id, profile):
         username = getpass.getuser()
         id = f"{username}.{str(Path.cwd()).replace(str(Path.home()), '').strip('/').replace('/', '.').lower()}"
 
-    config = {"aws": id, "hash": "md5", "pushed": "False", "symlinks": "ignore"}
+    hash_algo = "xxh3_64" if _XXHASH_AVAILABLE else "md5"
+    config = {"aws": id, "hash": hash_algo, "pushed": "False", "symlinks": "ignore"}
     if profile is not None:
         config["profile"] = profile
         print(green(f"Configured for profile={profile} aws bucket: ") + id)

@@ -258,8 +258,12 @@ class DatRepo:
     def get_master(self, local=None):
         try:
             self.download(".dat/master", _MASTER)
+            self.master_hash = read_inventory_hash(_MASTER)
             master = read_inventory(_MASTER)
             _MASTER.unlink()
+            if self.master_hash is None and master:
+                sample = next(iter(master.values()))
+                self.master_hash = "md5" if len(sample) == 32 else "xxh3_64"
         except ClientError as e:
             code = e.response["Error"]["Code"]
             if code in ("404", "NoSuchKey", "NoSuchBucket"):
@@ -277,6 +281,7 @@ class DatRepo:
                         )
                     else:
                         self.s3.create_bucket(Bucket=self.bucket)
+                    self.master_hash = None
                     master = local.copy()
                 else:
                     die("Bucket exists (according to config) but cannot be accessed; are you logged in?")
@@ -346,8 +351,9 @@ def take_inventory(config, root=None):
     return out
 
 
-def write_inventory(x, fname):
+def write_inventory(x, fname, hash_algo):
     with open(fname, "w") as f:
+        f.write(f"# hash: {hash_algo}\n")
         for d in sorted(x.keys()):
             f.write(d + "\t" + x[d] + "\n")
 
@@ -357,11 +363,20 @@ def read_inventory(fname=_LOCAL):
     if fname.is_file():
         out = {}
         for line in fname.read_text().splitlines():
-            if line:
+            if line and not line.startswith("#"):
                 row = line.split("\t")
                 out[row[0]] = row[1]
         return out
     return {}
+
+
+def read_inventory_hash(fname):
+    fname = Path(fname)
+    if fname.is_file():
+        for line in fname.read_text().splitlines():
+            if line.startswith("# hash:"):
+                return line[len("# hash:"):].strip()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -599,10 +614,10 @@ def dat_checkin(filename):
     master[filename] = current[filename]
 
     try:
-        write_inventory(master, _MASTER)
+        write_inventory(master, _MASTER, repo.config["hash"])
         repo.upload(filename)
         repo.upload(_MASTER)
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
         _MASTER.unlink()
     except ClientError as e:
         die(f"Failed to push file: {e}")
@@ -620,7 +635,7 @@ def dat_checkout(filename):
     current = take_inventory(repo.config)
     local = read_inventory()
     local[filename] = current[filename]
-    write_inventory(local, _LOCAL)
+    write_inventory(local, _LOCAL, repo.config["hash"])
 
 
 def dat_clone(bucket, folder, profile=None):
@@ -723,7 +738,7 @@ def dat_overwrite_master():
         die("Exiting...")
 
     current = take_inventory(repo.config)
-    write_inventory(current, _MASTER)
+    write_inventory(current, _MASTER, repo.config["hash"])
     if _LOCAL.is_file():
         _LOCAL.unlink()
 
@@ -748,7 +763,7 @@ def dat_overwrite_master():
             if to_delete:
                 repo.s3.delete_objects(Bucket=repo.bucket, Delete={"Objects": to_delete})
 
-        write_inventory(current, _LOCAL)
+        write_inventory(current, _LOCAL, repo.config["hash"])
         _MASTER.unlink()
     except ClientError as e:
         die(f"Failed to overwrite remote: {e}")
@@ -766,6 +781,13 @@ def dat_pull(dry=False, verbose=False):
     if verbose:
         print("Obtaining master")
     master = repo.get_master()
+
+    local_hash = repo.config.get("hash", "md5")
+    if repo.master_hash and repo.master_hash != local_hash:
+        die(
+            f"Remote master uses '{repo.master_hash}' hashes but local config uses '{local_hash}'.\n"
+            f"Run 'dat rehash {repo.master_hash}' to convert your local repo, then pull again."
+        )
 
     if verbose:
         print("Creating pull, kill lists")
@@ -790,7 +812,7 @@ def dat_pull(dry=False, verbose=False):
 
     if not active and not conflict:
         if not dry:
-            write_inventory(local, _LOCAL)
+            write_inventory(local, _LOCAL, repo.config["hash"])
         print("Everything up-to-date")
         sys.exit(0)
 
@@ -814,7 +836,7 @@ def dat_pull(dry=False, verbose=False):
                 p = Path(f)
                 if p.exists():
                     p.unlink()
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
 
 
 def dat_push(dry=False, verbose=False):
@@ -882,9 +904,9 @@ def dat_push(dry=False, verbose=False):
         if dry:
             print("[Dry Run] Would have synced updated .dat/master")
         else:
-            write_inventory(master, _MASTER)
+            write_inventory(master, _MASTER, repo.config["hash"])
             repo.upload(_MASTER)
-            write_inventory(local, _LOCAL)
+            write_inventory(local, _LOCAL, repo.config["hash"])
             _MASTER.unlink()
             repo.config["pushed"] = "True"
             repo.save_config()
@@ -902,7 +924,7 @@ def dat_push(dry=False, verbose=False):
         if resolved:
             print("Resolved: " + str(resolved))
     else:
-        write_inventory(master, _MASTER)
+        write_inventory(master, _MASTER, repo.config["hash"])
         repo.upload(_MASTER)
         for f in sorted(active & push):
             repo.upload(f)
@@ -911,7 +933,7 @@ def dat_push(dry=False, verbose=False):
                 repo.delete(f)
             except ClientError:
                 pass
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
         _MASTER.unlink()
         repo.config["pushed"] = "True"
         repo.save_config()
@@ -982,10 +1004,10 @@ def dat_rehash(algo="xxh3_64", dry=False):
     new_master = {f: new_hashes[f] for f in master}
 
     try:
-        write_inventory(new_master, _MASTER)
+        write_inventory(new_master, _MASTER, repo.config["hash"])
         repo.upload(_MASTER)
         write_config(repo.config, _CONFIG)
-        write_inventory(new_hashes, _LOCAL)
+        write_inventory(new_hashes, _LOCAL, repo.config["hash"])
         _MASTER.unlink()
     except ClientError as e:
         die(f"Failed to upload new master: {e}")
@@ -1025,7 +1047,7 @@ def dat_repair_master():
     remote_master = _REMOTE / ".dat" / "master"
     remote_master.parent.mkdir(parents=True, exist_ok=True)
     master = take_inventory(repo.config, root=_REMOTE)
-    write_inventory(master, remote_master)
+    write_inventory(master, remote_master, repo.config["hash"])
 
     try:
         repo.upload(remote_master, ".dat/master")
@@ -1057,7 +1079,7 @@ def dat_stash():
     for f in conflict:
         shutil.move(f, _STASH)
         local.pop(f)
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
 
 
 def dat_status(remote):
@@ -1083,24 +1105,24 @@ def dat_status(remote):
             current, local, master, push, hard=False
         )
         master = omaster.copy()
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
         local = olocal.copy()
         [purg_conflict, purg_resolved] = resolve_purge_conflicts(
             master, local, purg, hard=False
         )
         master = omaster.copy()
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
         local = olocal.copy()
         [pull_conflict, pull_resolved] = resolve_pull_conflicts(
             current, local, master, pull, hard=False
         )
         master = omaster.copy()
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
         local = olocal.copy()
         [kill_conflict, kill_resolved] = resolve_kill_conflicts(
             current, local, kill, hard=False
         )
-        write_inventory(local, _LOCAL)
+        write_inventory(local, _LOCAL, repo.config["hash"])
 
         all_conflict = pull_conflict | push_conflict | purg_conflict | kill_conflict
         conflict = sorted(all_conflict - (kill_conflict & push))

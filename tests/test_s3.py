@@ -55,9 +55,9 @@ def make_file(path: str, content: bytes = b"hello") -> str:
     return _md5(content)
 
 
-def put_master(s3, inventory: dict, bucket: str = BUCKET):
+def put_master(s3, inventory: dict, bucket: str = BUCKET, hash_algo: str = "md5"):
     """Serialize inventory and upload it as .dat/master to the given bucket."""
-    body = "".join(f"{k}\t{v}\n" for k, v in sorted(inventory.items()))
+    body = f"# hash: {hash_algo}\n" + "".join(f"{k}\t{v}\n" for k, v in sorted(inventory.items()))
     s3.put_object(Bucket=bucket, Key=".dat/master", Body=body.encode())
 
 
@@ -167,7 +167,7 @@ class TestDatPush:
         content = b"already synced"
         h = make_file("a.txt", content)
         inventory = {"a.txt": h}
-        write_inventory(inventory, repo_dir / ".dat" / "local")
+        write_inventory(inventory, repo_dir / ".dat" / "local", "md5")
         put_master(s3, inventory)
 
         with pytest.raises(SystemExit) as exc:
@@ -176,7 +176,7 @@ class TestDatPush:
 
     def test_uploads_new_files(self, repo_dir, s3):
         make_file("data.txt", b"new file content")
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {})
 
         dat_push()
@@ -191,7 +191,7 @@ class TestDatPush:
         h_a = make_file("a.txt", b"file a")
         # b.txt is tracked in local/master but does not exist on disk
         old_inv = {"a.txt": h_a, "b.txt": "oldhash"}
-        write_inventory(old_inv, repo_dir / ".dat" / "local")
+        write_inventory(old_inv, repo_dir / ".dat" / "local", "md5")
         put_master(s3, old_inv)
         put_s3_file(s3, "b.txt", b"old content")
 
@@ -205,7 +205,7 @@ class TestDatPush:
 
     def test_dry_run_does_not_upload(self, repo_dir, s3):
         make_file("dry.txt", b"data")
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {})
 
         dat_push(dry=True)
@@ -219,7 +219,7 @@ class TestDatPush:
         (tmp_path / ".dat").mkdir()
         write_config({"aws": fresh, "hash": "md5", "pushed": "False", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
         make_file("hello.txt", b"hello")
-        write_inventory({}, tmp_path / ".dat" / "local")
+        write_inventory({}, tmp_path / ".dat" / "local", "md5")
         monkeypatch.setattr(dat_module, "get_aws_region", lambda profile=None: None)
 
         dat_push()
@@ -238,7 +238,7 @@ class TestDatPull:
         content = b"already synced"
         h = make_file("a.txt", content)
         inventory = {"a.txt": h}
-        write_inventory(inventory, repo_dir / ".dat" / "local")
+        write_inventory(inventory, repo_dir / ".dat" / "local", "md5")
         put_master(s3, inventory)
 
         with pytest.raises(SystemExit) as exc:
@@ -250,7 +250,7 @@ class TestDatPull:
         h = _md5(content)
         put_s3_file(s3, "remote.txt", content)
         put_master(s3, {"remote.txt": h})
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
 
         dat_pull()
 
@@ -260,7 +260,7 @@ class TestDatPull:
     def test_removes_killed_local_files(self, repo_dir, s3):
         """A file deleted from master should be removed locally."""
         h = make_file("stale.txt", b"stale local copy")
-        write_inventory({"stale.txt": h}, repo_dir / ".dat" / "local")
+        write_inventory({"stale.txt": h}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {})  # master no longer tracks stale.txt → kill
 
         dat_pull()
@@ -273,7 +273,7 @@ class TestDatPull:
         h = _md5(content)
         put_s3_file(s3, "dry.txt", content)
         put_master(s3, {"dry.txt": h})
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
 
         dat_pull(dry=True)
 
@@ -288,7 +288,7 @@ class TestCheckinCheckout:
     def test_checkin_uploads_file_and_updates_inventories(self, repo_dir, s3):
         content = b"important dataset"
         h = make_file("data.csv", content)
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {})
 
         dat_checkin("data.csv")
@@ -306,7 +306,7 @@ class TestCheckinCheckout:
         content = b"remote dataset"
         h = _md5(content)
         put_s3_file(s3, "data.csv", content)
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
 
         dat_checkout("data.csv")
 
@@ -322,7 +322,7 @@ class TestDatStatus:
     def test_local_nothing_to_push(self, repo_dir, s3, capsys):
         content = b"synced"
         h = make_file("a.txt", content)
-        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local")
+        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local", "md5")
 
         dat_status(remote=False)
 
@@ -330,7 +330,7 @@ class TestDatStatus:
 
     def test_local_modified(self, repo_dir, s3, capsys):
         make_file("a.txt", b"new content")
-        write_inventory({"a.txt": "oldhash"}, repo_dir / ".dat" / "local")
+        write_inventory({"a.txt": "oldhash"}, repo_dir / ".dat" / "local", "md5")
 
         dat_status(remote=False)
 
@@ -338,7 +338,7 @@ class TestDatStatus:
 
     def test_local_deleted(self, repo_dir, s3, capsys):
         # b.txt in local inventory but not on disk
-        write_inventory({"b.txt": "somehash"}, repo_dir / ".dat" / "local")
+        write_inventory({"b.txt": "somehash"}, repo_dir / ".dat" / "local", "md5")
 
         dat_status(remote=False)
 
@@ -349,7 +349,7 @@ class TestDatStatus:
         h = _md5(content)
         put_s3_file(s3, "remote.txt", content)
         put_master(s3, {"remote.txt": h})
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
 
         dat_status(remote=True)
 
@@ -359,7 +359,7 @@ class TestDatStatus:
         content = b"synced"
         h = make_file("a.txt", content)
         inventory = {"a.txt": h}
-        write_inventory(inventory, repo_dir / ".dat" / "local")
+        write_inventory(inventory, repo_dir / ".dat" / "local", "md5")
         put_master(s3, inventory)
 
         dat_status(remote=True)
@@ -625,7 +625,7 @@ class TestDatRehash:
     def _clean_repo(self, repo_dir, s3, content=b"test data"):
         """Set up a clean md5 repo with one file pushed."""
         h = make_file("data.txt", content)
-        write_inventory({"data.txt": h}, repo_dir / ".dat" / "local")
+        write_inventory({"data.txt": h}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {"data.txt": h})
         return h
 
@@ -643,7 +643,8 @@ class TestDatRehash:
         # Verify master on S3 was updated
         resp = s3.get_object(Bucket=BUCKET, Key=".dat/master")
         lines = resp["Body"].read().decode().strip().split("\n")
-        for line in lines:
+        data_lines = [l for l in lines if not l.startswith("#")]
+        for line in data_lines:
             _, digest = line.split("\t")
             assert len(digest) == 16  # xxh3_64 hex is 16 chars
 
@@ -665,7 +666,7 @@ class TestDatRehash:
 
     def test_aborts_if_push_needed(self, repo_dir, s3):
         make_file("new.txt", b"unpushed file")
-        write_inventory({}, repo_dir / ".dat" / "local")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {})
 
         with pytest.raises(SystemExit):
@@ -674,7 +675,7 @@ class TestDatRehash:
     def test_aborts_if_purge_needed(self, repo_dir, s3):
         # b.txt tracked in local but deleted from disk
         h = make_file("a.txt", b"a")
-        write_inventory({"a.txt": h, "b.txt": "oldhash"}, repo_dir / ".dat" / "local")
+        write_inventory({"a.txt": h, "b.txt": "oldhash"}, repo_dir / ".dat" / "local", "md5")
         put_master(s3, {"a.txt": h, "b.txt": "oldhash"})
 
         with pytest.raises(SystemExit):
@@ -695,7 +696,7 @@ class TestDatRehash:
     def test_dry_run_notes_unsynced_remote_changes(self, repo_dir, s3, capsys):
         content = b"data"
         h = make_file("a.txt", content)
-        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local")
+        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local", "md5")
         # Master has a new file that local doesn't know about
         put_master(s3, {"a.txt": h, "b.txt": "remotehash"})
 

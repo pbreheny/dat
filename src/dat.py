@@ -225,15 +225,21 @@ class DatRepo:
     def __init__(self, config_path=_CONFIG):
         self.config = read_config(config_path)
         config_repair(self.config, config_path)
-        try:
-            if "profile" in self.config:
-                session = boto3.Session(profile_name=self.config["profile"])
-                self.s3 = session.client("s3")
-            else:
-                self.s3 = boto3.client("s3")
-        except (NoCredentialsError, CredentialRetrievalError) as e:
-            die(f"AWS credentials unavailable\n\n{e}\nRun 'aws login' or configure credentials first.")
+        self._s3 = None
         self.bucket, self.prefix = _parse_bucket(self.config["aws"])
+
+    @property
+    def s3(self):
+        if self._s3 is None:
+            try:
+                if "profile" in self.config:
+                    session = boto3.Session(profile_name=self.config["profile"])
+                    self._s3 = session.client("s3")
+                else:
+                    self._s3 = boto3.client("s3")
+            except (NoCredentialsError, CredentialRetrievalError) as e:
+                die(f"AWS credentials unavailable\n\n{e}\nRun 'aws login' or configure credentials first.")
+        return self._s3
 
     def key(self, path):
         return _full_key(self.prefix, str(path))

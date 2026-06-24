@@ -154,8 +154,9 @@ class TestGetMaster:
             raise NoCredentialsError()
 
         monkeypatch.setattr(boto3, "client", _raise)
+        repo = DatRepo()
         with pytest.raises(SystemExit):
-            DatRepo()
+            _ = repo.s3
 
 
 # ---------------------------------------------------------------------------

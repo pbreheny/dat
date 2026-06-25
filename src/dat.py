@@ -965,38 +965,53 @@ def dat_rehash(algo="xxh3_64", dry=False):
         items = sorted(push | purge)
         die("Local changes have not been pushed; run 'dat push' first:\n  " + "\n  ".join(items))
 
-    # Check for remote changes
     master = repo.get_master()
-    pull = needs_pull(master, local)
-    kill = needs_kill(master, local)
+    # If master already uses the target algorithm, this is the "catching up" scenario
+    # (another user already rehashed and pushed). Comparing hashes across algorithms is
+    # meaningless, so skip the remote-change check; 'dat pull' handles content sync after.
+    catching_up = repo.master_hash == algo
 
-    if dry:
+    if catching_up:
+        if dry:
+            print(f"Would rehash {len(current)} files from {current_algo} to {algo} locally (remote master already updated).")
+            return
+        n = len(local)
+        print(f"\nThis will rehash all {n} files locally to {algo} to match the remote master.")
+        confirm = input("Proceed? [Y/n]: ").strip().lower()
+        if confirm not in ("", "y"):
+            die("Aborted.")
+    else:
+        # Check for remote changes using the current (matching) algorithm
+        pull = needs_pull(master, local)
+        kill = needs_kill(master, local)
+
+        if dry:
+            if pull or kill:
+                print("Note: remote has unsynced changes; run 'dat pull' first before rehashing.")
+            print(f"Would rehash {len(current)} files from {current_algo} to {algo} and update the remote master.")
+            return
+
         if pull or kill:
-            print("Note: remote has unsynced changes; run 'dat pull' first before rehashing.")
-        print(f"Would rehash {len(current)} files from {current_algo} to {algo} and update the remote master.")
-        return
+            confirm = input("There are remote changes. Run 'dat pull' first (recommended)? [Y/n]: ").strip().lower()
+            if confirm in ("", "y"):
+                try:
+                    dat_pull()
+                except SystemExit as e:
+                    if e.code != 0:
+                        sys.exit(e.code)
+                local = read_inventory()
+                remaining = needs_pull(master, local) | needs_kill(master, local)
+                if remaining:
+                    die("Pull did not complete (conflicts?). Resolve issues before rehashing.")
+            else:
+                die("Cannot rehash with unsynced remote changes. Run 'dat pull' first.")
 
-    if pull or kill:
-        confirm = input("There are remote changes. Run 'dat pull' first (recommended)? [Y/n]: ").strip().lower()
-        if confirm in ("", "y"):
-            try:
-                dat_pull()
-            except SystemExit as e:
-                if e.code != 0:
-                    sys.exit(e.code)
-            local = read_inventory()
-            remaining = needs_pull(master, local) | needs_kill(master, local)
-            if remaining:
-                die("Pull did not complete (conflicts?). Resolve issues before rehashing.")
-        else:
-            die("Cannot rehash with unsynced remote changes. Run 'dat pull' first.")
-
-    n = len(local)
-    print(f"\nThis will rehash all {n} files using {algo} and update the remote master.")
-    print("Collaborators will need to run 'dat rehash' before their next pull.")
-    confirm = input("Proceed? [Y/n]: ").strip().lower()
-    if confirm not in ("", "y"):
-        die("Aborted.")
+        n = len(local)
+        print(f"\nThis will rehash all {n} files using {algo} and update the remote master.")
+        print("Collaborators will need to run 'dat rehash' before their next pull.")
+        confirm = input("Proceed? [Y/n]: ").strip().lower()
+        if confirm not in ("", "y"):
+            die("Aborted.")
 
     # Rehash with new algorithm
     repo.config["hash"] = algo
@@ -1007,18 +1022,25 @@ def dat_rehash(algo="xxh3_64", dry=False):
         repo.config["hash"] = current_algo
         die("Cannot rehash: files in master are missing locally:\n  " + "\n  ".join(sorted(missing)))
 
-    new_master = {f: new_hashes[f] for f in master}
-
-    try:
-        write_inventory(new_master, _MASTER, repo.config["hash"])
-        repo.upload(_MASTER)
-        write_config(repo.config, _CONFIG)
-        write_inventory(new_hashes, _LOCAL, repo.config["hash"])
-        _MASTER.unlink()
-    except ClientError as e:
-        die(f"Failed to upload new master: {e}")
-
-    print(f"Done. Rehashed {n} files; remote master and local inventory updated.")
+    if catching_up:
+        # Master is already correct; only update local config and inventory
+        try:
+            write_config(repo.config, _CONFIG)
+            write_inventory(new_hashes, _LOCAL, repo.config["hash"])
+        except OSError as e:
+            die(f"Failed to update local files: {e}")
+        print(f"Done. Rehashed {n} files locally; run 'dat pull' to sync any remote content changes.")
+    else:
+        new_master = {f: new_hashes[f] for f in master}
+        try:
+            write_inventory(new_master, _MASTER, repo.config["hash"])
+            repo.upload(_MASTER)
+            write_config(repo.config, _CONFIG)
+            write_inventory(new_hashes, _LOCAL, repo.config["hash"])
+            _MASTER.unlink()
+        except ClientError as e:
+            die(f"Failed to upload new master: {e}")
+        print(f"Done. Rehashed {n} files; remote master and local inventory updated.")
 
 
 def dat_pop(hard=False):

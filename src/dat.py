@@ -4,24 +4,31 @@
 # Definitions:
 #   push: local file is changed/new
 #   pull: remote file is changed/new
-#   purge: local file has been deleted (remove from master?)
-#   kill: remote file has been deleted (remove from current?)
+#   purge: local file has been deleted (remove from master)
+#   kill: remote file has been deleted (remove from current)
 
-import sys
-import boto3
+import argparse
+import fnmatch
+import getpass
+import hashlib
 import json
 import shutil
-import hashlib
-import getpass
 import subprocess
+import sys
 import textwrap
-import fnmatch
 from pathlib import Path
-from botocore.exceptions import ClientError, CredentialRetrievalError, NoCredentialsError
-import argparse
+from typing import NoReturn
+
+import boto3
+from botocore.exceptions import (
+    ClientError,
+    CredentialRetrievalError,
+    NoCredentialsError,
+)
 
 try:
     import xxhash as _xxhash
+
     _XXHASH_AVAILABLE = True
 except ImportError:
     _XXHASH_AVAILABLE = False
@@ -31,12 +38,12 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _DAT_DIR = Path(".dat")
-_CONFIG  = _DAT_DIR / "config"
-_LOCAL   = _DAT_DIR / "local"
-_MASTER  = _DAT_DIR / "master"
-_IGNORE  = _DAT_DIR / "ignore"
-_STASH   = _DAT_DIR / "stash"
-_REMOTE  = _DAT_DIR / "remote"
+_CONFIG = _DAT_DIR / "config"
+_LOCAL = _DAT_DIR / "local"
+_MASTER = _DAT_DIR / "master"
+_IGNORE = _DAT_DIR / "ignore"
+_STASH = _DAT_DIR / "stash"
+_REMOTE = _DAT_DIR / "remote"
 
 
 def dat():
@@ -47,7 +54,9 @@ def dat():
     sub = parser.add_subparsers(dest="command", metavar="command", required=True)
 
     p = sub.add_parser("init", help="initialize a new dat repository")
-    p.add_argument("bucket", nargs="?", help="S3 bucket name (auto-generated if omitted)")
+    p.add_argument(
+        "bucket", nargs="?", help="S3 bucket name (auto-generated if omitted)"
+    )
     p.add_argument("--profile", metavar="PROFILE", help="AWS CLI profile")
 
     p = sub.add_parser("checkin", help="check in a single file")
@@ -58,7 +67,9 @@ def dat():
 
     p = sub.add_parser("clone", help="clone a remote dat repository")
     p.add_argument("bucket", help="S3 bucket name or bucket/prefix")
-    p.add_argument("folder", nargs="?", help="local folder name (defaults to bucket name)")
+    p.add_argument(
+        "folder", nargs="?", help="local folder name (defaults to bucket name)"
+    )
     p.add_argument("--profile", metavar="PROFILE", help="AWS CLI profile")
 
     sub.add_parser("delete", help="delete remote bucket and local .dat directory")
@@ -82,7 +93,9 @@ def dat():
     sub.add_parser("overwrite-master", help="overwrite remote with local copy")
     sub.add_parser("repair-master", help="repair corrupted remote master inventory")
 
-    p = sub.add_parser("rehash", help="convert repository to a different hash algorithm")
+    p = sub.add_parser(
+        "rehash", help="convert repository to a different hash algorithm"
+    )
     p.add_argument(
         "algo",
         nargs="?",
@@ -135,6 +148,7 @@ def dat():
 # ANSI color helpers
 # ---------------------------------------------------------------------------
 
+
 def red(x):
     return "\033[01;38;5;196m" + x + "\033[0m"
 
@@ -147,13 +161,14 @@ def blue(x):
     return "\033[01;38;5;39m" + x + "\033[0m"
 
 
-def die(msg):
+def die(msg) -> NoReturn:
     sys.exit(red(msg))
 
 
 # ---------------------------------------------------------------------------
 # Hashing
 # ---------------------------------------------------------------------------
+
 
 def _hash_md5(fname):
     h = hashlib.md5()
@@ -186,6 +201,7 @@ def hash_file(fname, algorithm):
 # Low-level S3 utilities (used by DatRepo and by dat_clone before config exists)
 # ---------------------------------------------------------------------------
 
+
 def _parse_bucket(aws_str):
     """Return (bucket, prefix) where prefix is an empty string when absent."""
     parts = aws_str.split("/", 1)
@@ -209,7 +225,7 @@ def _download_all(s3, bucket, prefix, dest_dir):
     for page in paginator.paginate(**kwargs):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            rel = key[len(prefix) + 1:] if prefix else key
+            rel = key[len(prefix) + 1 :] if prefix else key
             if not rel:
                 continue
             local_path = dest_dir / rel
@@ -220,6 +236,7 @@ def _download_all(s3, bucket, prefix, dest_dir):
 # ---------------------------------------------------------------------------
 # DatRepo — owns config, S3 client, bucket, and prefix
 # ---------------------------------------------------------------------------
+
 
 class DatRepo:
     def __init__(self, config_path=_CONFIG):
@@ -238,7 +255,10 @@ class DatRepo:
                 else:
                     self._s3 = boto3.client("s3")
             except (NoCredentialsError, CredentialRetrievalError) as e:
-                die(f"AWS credentials unavailable\n\n{e}\nRun 'aws login' or configure credentials first.")
+                die(
+                    f"AWS credentials unavailable\n\n{e}\nRun 'aws login' or configure credentials first."
+                )
+        assert self._s3 is not None
         return self._s3
 
     def key(self, path):
@@ -290,7 +310,9 @@ class DatRepo:
                     self.master_hash = None
                     master = local.copy()
                 else:
-                    die("Bucket exists (according to config) but cannot be accessed; are you logged in?")
+                    die(
+                        "Bucket exists (according to config) but cannot be accessed; are you logged in?"
+                    )
             else:
                 die(f"Failed to access S3: {e}")
         return master
@@ -302,6 +324,7 @@ class DatRepo:
 # ---------------------------------------------------------------------------
 # Inventory
 # ---------------------------------------------------------------------------
+
 
 def _iter_files(root, symlinks="follow"):
     """Yield all files under root, skipping .dat and .git directories."""
@@ -381,13 +404,14 @@ def read_inventory_hash(fname):
     if fname.is_file():
         for line in fname.read_text().splitlines():
             if line.startswith("# hash:"):
-                return line[len("# hash:"):].strip()
+                return line[len("# hash:") :].strip()
     return None
 
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
 
 def read_config(filename=_CONFIG):
     filename = Path(filename)
@@ -452,7 +476,9 @@ def config_repair(config, config_path):
     if "symlinks" not in config:
         if _repo_has_symlinks():
             config["symlinks"] = "follow"
-            print("Note: updated config (symlinks: follow — existing symlinks detected)")
+            print(
+                "Note: updated config (symlinks: follow — existing symlinks detected)"
+            )
         else:
             config["symlinks"] = "ignore"
             print("Note: updated config (symlinks: ignore)")
@@ -469,6 +495,7 @@ def get_aws_region(profile=None):
 # ---------------------------------------------------------------------------
 # Change detection
 # ---------------------------------------------------------------------------
+
 
 def needs_push(current, local):
     push = set()
@@ -513,6 +540,7 @@ def needs_kill(master, local):
 # ---------------------------------------------------------------------------
 # Conflict resolution
 # ---------------------------------------------------------------------------
+
 
 def resolve_push_conflicts(current, local, master, push, hard=True):
     conflict = set()
@@ -607,6 +635,7 @@ def resolve_kill_conflicts(current, local, kill, hard=True):
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
+
 
 def dat_checkin(filename):
     if not Path(filename).is_file():
@@ -703,7 +732,9 @@ def dat_delete():
             for page in paginator.paginate(Bucket=repo.bucket):
                 objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
                 if objects:
-                    repo.s3.delete_objects(Bucket=repo.bucket, Delete={"Objects": objects})
+                    repo.s3.delete_objects(
+                        Bucket=repo.bucket, Delete={"Objects": objects}
+                    )
             repo.s3.delete_bucket(Bucket=repo.bucket)
             print(f"Deleted aws bucket: {repo.bucket}")
         else:
@@ -767,7 +798,9 @@ def dat_overwrite_master():
                 if obj["Key"] not in local_keys
             ]
             if to_delete:
-                repo.s3.delete_objects(Bucket=repo.bucket, Delete={"Objects": to_delete})
+                repo.s3.delete_objects(
+                    Bucket=repo.bucket, Delete={"Objects": to_delete}
+                )
 
         write_inventory(current, _LOCAL, repo.config["hash"])
         _MASTER.unlink()
@@ -802,7 +835,9 @@ def dat_pull(dry=False, verbose=False):
 
     if verbose:
         print("Checking for conflicts")
-    [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
+    [pull_conflict, pull_resolved] = resolve_pull_conflicts(
+        current, local, master, pull
+    )
     [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
     conflict = sorted(pull_conflict | kill_conflict)
     if conflict:
@@ -814,7 +849,9 @@ def dat_pull(dry=False, verbose=False):
         )
 
     resolved = sorted(kill_resolved | pull_resolved)
-    active = (pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved
+    active = (
+        (pull | kill) - pull_conflict - kill_conflict - pull_resolved - kill_resolved
+    )
 
     if not active and not conflict:
         if not dry:
@@ -870,7 +907,9 @@ def dat_push(dry=False, verbose=False):
 
     if verbose:
         print("Checking for conflicts")
-    [push_conflict, push_resolved] = resolve_push_conflicts(current, local, master, push)
+    [push_conflict, push_resolved] = resolve_push_conflicts(
+        current, local, master, push
+    )
     [purg_conflict, purg_resolved] = resolve_purge_conflicts(master, local, purg)
     conflict = sorted(push_conflict | purg_conflict)
     if conflict:
@@ -884,8 +923,7 @@ def dat_push(dry=False, verbose=False):
     # Delete ignored files that are still physically present from S3
     ignore_patterns = read_ignore_patterns()
     purge_ignored = {
-        f for f in purg
-        if Path(f).exists() and _is_ignored(f, ignore_patterns)
+        f for f in purg if Path(f).exists() and _is_ignored(f, ignore_patterns)
     }
     if purge_ignored and not dry:
         for f in purge_ignored:
@@ -900,7 +938,9 @@ def dat_push(dry=False, verbose=False):
         local.pop(f, None)
     purg -= purge_ignored
 
-    active = (push | purg) - push_conflict - purg_conflict - push_resolved - purg_resolved
+    active = (
+        (push | purg) - push_conflict - purg_conflict - push_resolved - purg_resolved
+    )
 
     if verbose:
         print("Pushing")
@@ -963,7 +1003,10 @@ def dat_rehash(algo="xxh3_64", dry=False):
     purge = needs_purge(current, local)
     if push or purge:
         items = sorted(push | purge)
-        die("Local changes have not been pushed; run 'dat push' first:\n  " + "\n  ".join(items))
+        die(
+            "Local changes have not been pushed; run 'dat push' first:\n  "
+            + "\n  ".join(items)
+        )
 
     master = repo.get_master()
     # If master already uses the target algorithm, this is the "catching up" scenario
@@ -973,10 +1016,14 @@ def dat_rehash(algo="xxh3_64", dry=False):
 
     if catching_up:
         if dry:
-            print(f"Would rehash {len(current)} files from {current_algo} to {algo} locally (remote master already updated).")
+            print(
+                f"Would rehash {len(current)} files from {current_algo} to {algo} locally (remote master already updated)."
+            )
             return
         n = len(local)
-        print(f"\nThis will rehash all {n} files locally to {algo} to match the remote master.")
+        print(
+            f"\nThis will rehash all {n} files locally to {algo} to match the remote master."
+        )
         confirm = input("Proceed? [Y/n]: ").strip().lower()
         if confirm not in ("", "y"):
             die("Aborted.")
@@ -987,12 +1034,22 @@ def dat_rehash(algo="xxh3_64", dry=False):
 
         if dry:
             if pull or kill:
-                print("Note: remote has unsynced changes; run 'dat pull' first before rehashing.")
-            print(f"Would rehash {len(current)} files from {current_algo} to {algo} and update the remote master.")
+                print(
+                    "Note: remote has unsynced changes; run 'dat pull' first before rehashing."
+                )
+            print(
+                f"Would rehash {len(current)} files from {current_algo} to {algo} and update the remote master."
+            )
             return
 
         if pull or kill:
-            confirm = input("There are remote changes. Run 'dat pull' first (recommended)? [Y/n]: ").strip().lower()
+            confirm = (
+                input(
+                    "There are remote changes. Run 'dat pull' first (recommended)? [Y/n]: "
+                )
+                .strip()
+                .lower()
+            )
             if confirm in ("", "y"):
                 try:
                     dat_pull()
@@ -1002,12 +1059,16 @@ def dat_rehash(algo="xxh3_64", dry=False):
                 local = read_inventory()
                 remaining = needs_pull(master, local) | needs_kill(master, local)
                 if remaining:
-                    die("Pull did not complete (conflicts?). Resolve issues before rehashing.")
+                    die(
+                        "Pull did not complete (conflicts?). Resolve issues before rehashing."
+                    )
             else:
                 die("Cannot rehash with unsynced remote changes. Run 'dat pull' first.")
 
         n = len(local)
-        print(f"\nThis will rehash all {n} files using {algo} and update the remote master.")
+        print(
+            f"\nThis will rehash all {n} files using {algo} and update the remote master."
+        )
         print("Collaborators will need to run 'dat rehash' before their next pull.")
         confirm = input("Proceed? [Y/n]: ").strip().lower()
         if confirm not in ("", "y"):
@@ -1025,12 +1086,17 @@ def dat_rehash(algo="xxh3_64", dry=False):
             write_inventory(new_hashes, _LOCAL, repo.config["hash"])
         except OSError as e:
             die(f"Failed to update local files: {e}")
-        print(f"Done. Rehashed {n} files locally; run 'dat pull' to sync any remote content changes.")
+        print(
+            f"Done. Rehashed {n} files locally; run 'dat pull' to sync any remote content changes."
+        )
     else:
         missing = set(master.keys()) - set(new_hashes.keys())
         if missing:
             repo.config["hash"] = current_algo
-            die("Cannot rehash: files in master are missing locally:\n  " + "\n  ".join(sorted(missing)))
+            die(
+                "Cannot rehash: files in master are missing locally:\n  "
+                + "\n  ".join(sorted(missing))
+            )
         new_master = {f: new_hashes[f] for f in master}
         try:
             write_inventory(new_master, _MASTER, repo.config["hash"])
@@ -1099,7 +1165,9 @@ def dat_stash():
 
     pull = needs_pull(master, local)
     kill = needs_kill(master, local)
-    [pull_conflict, pull_resolved] = resolve_pull_conflicts(current, local, master, pull)
+    [pull_conflict, pull_resolved] = resolve_pull_conflicts(
+        current, local, master, pull
+    )
     [kill_conflict, kill_resolved] = resolve_kill_conflicts(current, local, kill)
     conflict = pull_conflict.union(kill_conflict)
 
@@ -1242,13 +1310,17 @@ def dat_share(account_number, username=None, root=False, verbose=False):
     ]
 
     if verbose:
-        print(f"[DEBUG] Constructed policy statements: {json.dumps(statements, indent=2)}")
+        print(
+            f"[DEBUG] Constructed policy statements: {json.dumps(statements, indent=2)}"
+        )
 
     try:
         response = repo.s3.get_bucket_policy(Bucket=bucket_name)
         policy = json.loads(response["Policy"])
         if verbose:
-            print(f"[DEBUG] Existing bucket policy retrieved:\n{json.dumps(policy, indent=2)}")
+            print(
+                f"[DEBUG] Existing bucket policy retrieved:\n{json.dumps(policy, indent=2)}"
+            )
     except ClientError as e:
         error_code = e.response["Error"]["Code"]
         if error_code == "NoSuchBucketPolicy":
@@ -1273,7 +1345,9 @@ def dat_share(account_number, username=None, root=False, verbose=False):
     policy["Statement"].extend(statements)
 
     if verbose:
-        print(f"[DEBUG] Updated bucket policy to be applied:\n{json.dumps(policy, indent=2)}")
+        print(
+            f"[DEBUG] Updated bucket policy to be applied:\n{json.dumps(policy, indent=2)}"
+        )
 
     try:
         repo.s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
@@ -1291,6 +1365,7 @@ def dat_share(account_number, username=None, root=False, verbose=False):
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
 
 def git_tracked():
     try:

@@ -1,10 +1,12 @@
 [![GitHub version](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pbreheny/dat/master/.version.json&style=flat&logo=github)](https://github.com/pbreheny/dat)
 
-# dat: A push/pull system for keeping files synchronized without version control
+# dat: Push/pull sync with minimal overhead
 
-Motivation: `git` is great, but if you have lots of big binary files, the `git` repo becomes enormous. Furthermore, if these files include private data, you might not want to host them on GitHub. `dat` allows you to push and pull like `git`, but with very little overhead (because it doesn't do version control).
+`git` is great for code, but is less useful with other types of files: large files cause the repo to balloon in size, many of its tools like diff and merge only work well with text, and private data is problematic to store on GitHub. `dat` gives you a `git`-style push/pull workflow backed by AWS S3, without the version history overhead. It is particularly useful for large binary files like images, PDFs, and serialized data files.
 
-The basic logic behind `dat` is that it tracks the [md5](https://en.wikipedia.org/wiki/MD5) hash of all the files in a `dat` repo and only pushes/pulls if that md5 hash has changed.
+The key difference from simply using rsync or copying files to S3 directly: `dat` detects conflicts. If a collaborator has modified a file you're about to overwrite, `dat` flags it rather than silently clobbering their work. You get safe multi-user coordination without a version control system.
+
+Under the hood, `dat` computes the (xxh3_64) hash of every file and only transfers data when content has changed. This means that syncing operations are fast even when directories are large.
 
 ## Installation
 

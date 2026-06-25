@@ -1017,13 +1017,9 @@ def dat_rehash(algo="xxh3_64", dry=False):
     repo.config["hash"] = algo
     new_hashes = take_inventory(repo.config)
 
-    missing = set(master.keys()) - set(new_hashes.keys())
-    if missing:
-        repo.config["hash"] = current_algo
-        die("Cannot rehash: files in master are missing locally:\n  " + "\n  ".join(sorted(missing)))
-
     if catching_up:
-        # Master is already correct; only update local config and inventory
+        # Master is already correct; only update local config and inventory.
+        # Missing files will be resolved by 'dat pull' after rehashing.
         try:
             write_config(repo.config, _CONFIG)
             write_inventory(new_hashes, _LOCAL, repo.config["hash"])
@@ -1031,6 +1027,10 @@ def dat_rehash(algo="xxh3_64", dry=False):
             die(f"Failed to update local files: {e}")
         print(f"Done. Rehashed {n} files locally; run 'dat pull' to sync any remote content changes.")
     else:
+        missing = set(master.keys()) - set(new_hashes.keys())
+        if missing:
+            repo.config["hash"] = current_algo
+            die("Cannot rehash: files in master are missing locally:\n  " + "\n  ".join(sorted(missing)))
         new_master = {f: new_hashes[f] for f in master}
         try:
             write_inventory(new_master, _MASTER, repo.config["hash"])

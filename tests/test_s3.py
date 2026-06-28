@@ -32,6 +32,7 @@ from dat import (
     dat_status,
     read_config,
     read_inventory,
+    read_inventory_hash,
     write_config,
     write_inventory,
 )
@@ -213,6 +214,27 @@ class TestDatPush:
 
         assert "dry.txt" not in bucket_keys(s3)
 
+    def test_local_inv_algo_mismatch_dies(self, repo_dir, s3):
+        """Config updated to xxh3_64 (e.g. via git) but local inventory still has md5 hashes."""
+        write_config({"aws": BUCKET, "hash": "xxh3_64", "pushed": "True", "symlinks": "ignore"}, repo_dir / ".dat" / "config")
+        h = make_file("a.txt", b"data")
+        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local", "md5")
+        put_master(s3, {"a.txt": h})
+
+        with pytest.raises(SystemExit) as exc:
+            dat_push()
+        assert "dat rehash" in str(exc.value.code)
+
+    def test_master_hash_mismatch_dies(self, repo_dir, s3):
+        """Master uses xxh3_64 but config says md5 — should die before uploading anything."""
+        make_file("a.txt", b"data")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
+        put_master(s3, {"a.txt": "abcdef0123456789"}, hash_algo="xxh3_64")
+
+        with pytest.raises(SystemExit) as exc:
+            dat_push()
+        assert "dat rehash" in str(exc.value.code)
+
     def test_first_push_sets_pushed_true(self, tmp_path, monkeypatch, s3):
         """First ever push (pushed==False) sets pushed=True in config after success."""
         fresh = "brand-new-bucket-push"
@@ -279,6 +301,29 @@ class TestDatPull:
         dat_pull(dry=True)
 
         assert not Path("dry.txt").exists()
+
+    def test_local_inv_algo_mismatch_dies(self, repo_dir, s3):
+        """Config updated to xxh3_64 (e.g. via git) but local inventory still has md5 hashes."""
+        write_config({"aws": BUCKET, "hash": "xxh3_64", "pushed": "True", "symlinks": "ignore"}, repo_dir / ".dat" / "config")
+        h = make_file("a.txt", b"data")
+        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local", "md5")
+        put_master(s3, {"a.txt": h}, hash_algo="xxh3_64")
+
+        with pytest.raises(SystemExit) as exc:
+            dat_pull()
+        assert "dat rehash" in str(exc.value.code)
+
+    def test_master_hash_mismatch_message_says_rehash(self, repo_dir, s3):
+        """Error message for master/config hash mismatch should say 'dat rehash', not name an algo."""
+        h = make_file("a.txt", b"data")
+        write_inventory({"a.txt": h}, repo_dir / ".dat" / "local", "md5")
+        put_master(s3, {"a.txt": "abcdef0123456789"}, hash_algo="xxh3_64")
+
+        with pytest.raises(SystemExit) as exc:
+            dat_pull()
+        msg = str(exc.value.code)
+        assert "dat rehash" in msg
+        assert "dat rehash md5" not in msg  # must not tell user to downgrade
 
 
 # ---------------------------------------------------------------------------
@@ -713,3 +758,24 @@ class TestDatRehash:
 
         with pytest.raises(SystemExit):
             dat_rehash("xxh3_64")
+
+    def test_config_ahead_of_local_inventory(self, repo_dir, s3, monkeypatch):
+        """Config updated to xxh3_64 via git, but local inventory and master still use md5.
+        dat_rehash should proceed rather than exit with 'nothing to do'."""
+        content = b"test data"
+        h_md5 = self._clean_repo(repo_dir, s3, content)
+        # Simulate git pull updating config to xxh3_64 before rehash ran
+        write_config({"aws": BUCKET, "hash": "xxh3_64", "pushed": "True", "symlinks": "ignore"}, repo_dir / ".dat" / "config")
+        monkeypatch.setattr("builtins.input", lambda _: "")
+
+        dat_rehash("xxh3_64")
+
+        config = read_config(repo_dir / ".dat" / "config")
+        assert config["hash"] == "xxh3_64"
+        local = read_inventory()
+        assert local["data.txt"] == _xxh3_64(content)
+        assert read_inventory_hash(repo_dir / ".dat" / "local") == "xxh3_64"
+        # Master on S3 should have been updated to xxh3_64
+        resp = s3.get_object(Bucket=BUCKET, Key=".dat/master")
+        master_body = resp["Body"].read().decode()
+        assert "# hash: xxh3_64" in master_body

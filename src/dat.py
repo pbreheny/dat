@@ -813,6 +813,14 @@ def dat_pull(dry=False, verbose=False):
         print("Reading config")
     repo = DatRepo()
 
+    local_hash = repo.config.get("hash", "md5")
+    local_inv_algo = read_inventory_hash(_LOCAL)
+    if local_inv_algo and local_inv_algo != local_hash:
+        die(
+            f"Local inventory uses '{local_inv_algo}' hashes but config specifies '{local_hash}'.\n"
+            f"Run 'dat rehash' to update your local inventory, then pull again."
+        )
+
     if verbose:
         print("Taking inventory")
     current = take_inventory(repo.config)
@@ -821,11 +829,10 @@ def dat_pull(dry=False, verbose=False):
         print("Obtaining master")
     master = repo.get_master()
 
-    local_hash = repo.config.get("hash", "md5")
     if repo.master_hash and repo.master_hash != local_hash:
         die(
             f"Remote master uses '{repo.master_hash}' hashes but local config uses '{local_hash}'.\n"
-            f"Run 'dat rehash {repo.master_hash}' to convert your local repo, then pull again."
+            f"Run 'dat rehash' to resolve the mismatch, then pull again."
         )
 
     if verbose:
@@ -887,6 +894,14 @@ def dat_push(dry=False, verbose=False):
         print("Reading config")
     repo = DatRepo()
 
+    config_hash = repo.config.get("hash", "md5")
+    local_inv_algo = read_inventory_hash(_LOCAL)
+    if local_inv_algo and local_inv_algo != config_hash:
+        die(
+            f"Local inventory uses '{local_inv_algo}' hashes but config specifies '{config_hash}'.\n"
+            f"Run 'dat rehash' to update your local inventory before pushing."
+        )
+
     if verbose:
         print("Taking inventory")
     current = take_inventory(repo.config)
@@ -904,6 +919,12 @@ def dat_push(dry=False, verbose=False):
     if verbose:
         print("Obtaining master")
     master = repo.get_master(local)
+
+    if repo.master_hash and repo.master_hash != config_hash:
+        die(
+            f"Remote master uses '{repo.master_hash}' hashes but local config uses '{config_hash}'.\n"
+            f"Run 'dat rehash' to resolve the mismatch before pushing."
+        )
 
     if verbose:
         print("Checking for conflicts")
@@ -990,14 +1011,21 @@ def dat_rehash(algo="xxh3_64", dry=False):
         algo = "xxh3_64"
 
     repo = DatRepo()
-    current_algo = repo.config.get("hash", "md5")
+    original_config_hash = repo.config.get("hash", "md5")
+    local_inv_algo = read_inventory_hash(_LOCAL)
+    # Use the algorithm actually stored in the local inventory as current_algo.
+    # This can differ from the config if .dat/config was updated via git before rehash ran.
+    current_algo = local_inv_algo or original_config_hash
 
     if algo == current_algo:
         print(f"Already using {algo}; nothing to do.")
         return
 
-    # Check for unpushed/unpurged local changes before anything else
-    current = take_inventory(repo.config)
+    # Check for unpushed/unpurged local changes before anything else.
+    # Use current_algo (the actual stored hash) for comparison, not the config's hash.
+    check_config = dict(repo.config)
+    check_config["hash"] = current_algo
+    current = take_inventory(check_config)
     local = read_inventory()
     push = needs_push(current, local)
     purge = needs_purge(current, local)
@@ -1092,7 +1120,7 @@ def dat_rehash(algo="xxh3_64", dry=False):
     else:
         missing = set(master.keys()) - set(new_hashes.keys())
         if missing:
-            repo.config["hash"] = current_algo
+            repo.config["hash"] = original_config_hash
             die(
                 "Cannot rehash: files in master are missing locally:\n  "
                 + "\n  ".join(sorted(missing))

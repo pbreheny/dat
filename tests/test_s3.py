@@ -188,6 +188,24 @@ class TestDatPush:
         assert ".dat/master" in keys
         assert "data.txt" in read_inventory()
 
+    def test_publishes_shared_config_only(self, repo_dir, s3):
+        """dat_push must upload .dat/config to S3 so collaborators (and clone)
+        can learn the repo's hash/symlinks -- but only the keys that must be
+        identical for every collaborator, not machine-local ones like aws/pushed."""
+        make_file("data.txt", b"new file content")
+        write_inventory({}, repo_dir / ".dat" / "local", "md5")
+        put_master(s3, {})
+
+        dat_push()
+
+        assert ".dat/config" in bucket_keys(s3)
+        body = s3.get_object(Bucket=BUCKET, Key=".dat/config")["Body"].read().decode()
+        remote = dict(
+            (k.strip(), v.strip())
+            for k, v in (line.split(":", 1) for line in body.splitlines() if ":" in line)
+        )
+        assert remote == {"hash": "md5", "symlinks": "ignore"}
+
     def test_deletes_purged_files(self, repo_dir, s3):
         """A file deleted locally (but tracked) should be removed from S3."""
         h_a = make_file("a.txt", b"file a")
@@ -505,20 +523,26 @@ class TestDatClone:
         with pytest.raises(SystemExit):
             dat_clone(BUCKET, "existing")
 
-    def test_inherits_hash_from_remote_config(self, tmp_path, monkeypatch, s3):
-        """Clone picks up the remote repo's hash algorithm."""
+    def test_inherits_hash_and_symlinks_from_remote_config(self, tmp_path, monkeypatch, s3):
+        """Clone picks up the remote repo's shared config (hash, symlinks)."""
         monkeypatch.chdir(tmp_path)
-        remote_cfg = "aws: test-dat-bucket\nhash: xxh3_64\npushed: True\nsymlinks: ignore\n"
+        remote_cfg = "hash: xxh3_64\nsymlinks: follow\n"
         s3.put_object(Bucket=BUCKET, Key=".dat/config", Body=remote_cfg.encode())
-        put_master(s3, {})
+        put_master(s3, {}, hash_algo="xxh3_64")
 
         dat_clone(BUCKET, "cloned")
 
         config = read_config(tmp_path / "cloned" / ".dat" / "config")
         assert config["hash"] == "xxh3_64"
+        assert config["symlinks"] == "follow"
+        # Local-only keys must not leak in from the remote config; they come
+        # from the clone call itself.
+        assert config["aws"] == BUCKET
+        assert config["pushed"] == "True"
 
-    def test_falls_back_to_md5_when_no_remote_config(self, tmp_path, monkeypatch, s3):
-        """Clone defaults to md5 when the remote has no .dat/config (old repo)."""
+    def test_falls_back_to_md5_when_no_remote_config_and_no_master(self, tmp_path, monkeypatch, s3):
+        """Clone defaults to md5 when there's neither a remote config nor a master
+        with digests to sample from (a genuinely empty/ancient repo)."""
         monkeypatch.chdir(tmp_path)
         put_master(s3, {})
 
@@ -526,6 +550,88 @@ class TestDatClone:
 
         config = read_config(tmp_path / "cloned" / ".dat" / "config")
         assert config["hash"] == "md5"
+        assert config["symlinks"] == "ignore"
+
+    def test_infers_hash_from_master_when_no_remote_config(self, tmp_path, monkeypatch, s3):
+        """Regression test: previously .dat/config was never actually uploaded to
+        S3 by any dat command, so clone always silently fell back to md5 -- even
+        when the source repo used xxh3_64. That produced a config/local-inventory
+        mismatch immediately after cloning ('Local inventory uses xxh3_64 hashes
+        but config specifies md5'). If a remote config is missing, clone must
+        infer the algorithm from the downloaded master's own header instead of
+        blindly assuming md5.
+        """
+        monkeypatch.chdir(tmp_path)
+        put_master(s3, {"a.txt": "0123456789abcdef"}, hash_algo="xxh3_64")
+
+        dat_clone(BUCKET, "cloned")
+
+        config = read_config(tmp_path / "cloned" / ".dat" / "config")
+        assert config["hash"] == "xxh3_64"
+        local_algo = read_inventory_hash(tmp_path / "cloned" / ".dat" / "local")
+        assert local_algo == config["hash"]
+
+    def test_not_logged_in_dies_cleanly(self, tmp_path, monkeypatch, s3):
+        """No AWS credentials configured must produce a clean error, not a
+        raw NoCredentialsError traceback (the login check only caught
+        ClientError, which is what expired/invalid credentials raise --
+        not what a total absence of credentials raises)."""
+        from botocore.exceptions import NoCredentialsError
+
+        monkeypatch.chdir(tmp_path)
+
+        class FakeSTS:
+            def get_caller_identity(self):
+                raise NoCredentialsError()
+
+        class FakeSession:
+            def __init__(self, profile_name=None):
+                pass
+
+            def client(self, service):
+                assert service == "sts", "should die before requesting an s3 client"
+                return FakeSTS()
+
+        monkeypatch.setattr(boto3, "Session", FakeSession)
+
+        with pytest.raises(SystemExit):
+            dat_clone(BUCKET, "cloned")
+
+        assert not (tmp_path / "cloned").exists()
+
+    def test_roundtrip_push_then_clone_allows_further_push(self, tmp_path, monkeypatch, s3):
+        """End-to-end regression test for the full clone bug: init a repo with
+        the default xxh3_64 hash, push it, clone it, and confirm the clone's
+        config/local inventory agree and a further push from the clone succeeds
+        instead of dying on a hash mismatch."""
+        fresh = "roundtrip-bucket"
+        monkeypatch.setattr(dat_module, "get_aws_region", lambda profile=None: None)
+
+        src = tmp_path / "src"
+        src.mkdir()
+        monkeypatch.chdir(src)
+        dat_init(fresh, profile=None)
+        make_file("data.csv", b"some data")
+
+        dat_push()
+
+        src_config = read_config(src / ".dat" / "config")
+        assert src_config["hash"] == "xxh3_64"
+        assert ".dat/config" in bucket_keys(s3, fresh)
+
+        monkeypatch.chdir(tmp_path)
+        dat_clone(fresh, "cloned")
+        cloned = tmp_path / "cloned"
+
+        cloned_config = read_config(cloned / ".dat" / "config")
+        assert cloned_config["hash"] == "xxh3_64"
+        assert read_inventory_hash(cloned / ".dat" / "local") == "xxh3_64"
+
+        monkeypatch.chdir(cloned)
+        make_file("more.csv", b"more data")
+        dat_push()  # must not raise/die on a hash mismatch
+
+        assert "more.csv" in bucket_keys(s3, fresh)
 
 
 # ---------------------------------------------------------------------------
@@ -779,3 +885,20 @@ class TestDatRehash:
         resp = s3.get_object(Bucket=BUCKET, Key=".dat/master")
         master_body = resp["Body"].read().decode()
         assert "# hash: xxh3_64" in master_body
+
+    def test_corrects_stale_config_when_local_already_matches(self, repo_dir, s3):
+        """Reproduces the dat-clone bug: local inventory is already xxh3_64 (e.g.
+        renamed straight from a downloaded xxh3_64 master) but the config still
+        says md5. Rehashing to xxh3_64 must fix the config instead of claiming
+        there is nothing to do, which previously left push/pull permanently stuck."""
+        write_config(
+            {"aws": BUCKET, "hash": "md5", "pushed": "True", "symlinks": "ignore"},
+            repo_dir / ".dat" / "config",
+        )
+        write_inventory({"a.txt": "0123456789abcdef"}, repo_dir / ".dat" / "local", "xxh3_64")
+        put_master(s3, {"a.txt": "0123456789abcdef"}, hash_algo="xxh3_64")
+
+        dat_rehash("xxh3_64")
+
+        config = read_config(repo_dir / ".dat" / "config")
+        assert config["hash"] == "xxh3_64"

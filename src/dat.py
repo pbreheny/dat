@@ -44,6 +44,12 @@ _MASTER = _DAT_DIR / "master"
 _IGNORE = _DAT_DIR / "ignore"
 _STASH = _DAT_DIR / "stash"
 _REMOTE = _DAT_DIR / "remote"
+_REMOTE_CONFIG = _DAT_DIR / "remote_config"
+
+# Config keys that describe the repo itself and must be identical for every
+# collaborator; these are the only keys published to S3 as .dat/config.
+# Everything else (aws, profile, pushed) is local to this machine's checkout.
+_SHARED_CONFIG_KEYS = ("hash", "symlinks")
 
 
 def dat():
@@ -281,6 +287,12 @@ class DatRepo:
     def download_all(self, dest_dir):
         _download_all(self.s3, self.bucket, self.prefix, dest_dir)
 
+    def publish_config(self):
+        """Upload the shared (repo-level) subset of config to S3 as .dat/config."""
+        write_config(_shared_config(self.config), _REMOTE_CONFIG)
+        self.upload(_REMOTE_CONFIG, ".dat/config")
+        _REMOTE_CONFIG.unlink()
+
     def get_master(self, local=None):
         try:
             self.download(".dat/master", _MASTER)
@@ -288,8 +300,7 @@ class DatRepo:
             master = read_inventory(_MASTER)
             _MASTER.unlink()
             if self.master_hash is None and master:
-                sample = next(iter(master.values()))
-                self.master_hash = "md5" if len(sample) == 32 else "xxh3_64"
+                self.master_hash = _infer_hash_algo(master)
         except ClientError as e:
             code = e.response["Error"]["Code"]
             if code in ("404", "NoSuchKey", "NoSuchBucket"):
@@ -408,6 +419,14 @@ def read_inventory_hash(fname):
     return None
 
 
+def _infer_hash_algo(inventory):
+    """Guess hash algorithm from digest length, for inventories with no header comment."""
+    if not inventory:
+        return None
+    sample = next(iter(inventory.values()))
+    return "md5" if len(sample) == 32 else "xxh3_64"
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -454,6 +473,15 @@ def write_config(config, filename=_CONFIG):
     with open(filename, "w") as f:
         for k in sorted(config.keys()):
             f.write(f"{k}: {config[k]}\n")
+
+
+def _shared_config(config):
+    """Return the subset of config that must be identical across collaborators.
+
+    This is the subset published to S3 as .dat/config; everything else (aws,
+    profile, pushed) is local to this machine's checkout.
+    """
+    return {k: config[k] for k in _SHARED_CONFIG_KEYS if k in config}
 
 
 def _repo_has_symlinks(root=None):
@@ -652,6 +680,7 @@ def dat_checkin(filename):
         write_inventory(master, _MASTER, repo.config["hash"])
         repo.upload(filename)
         repo.upload(_MASTER)
+        repo.publish_config()
         write_inventory(local, _LOCAL, repo.config["hash"])
         _MASTER.unlink()
     except ClientError as e:
@@ -685,7 +714,7 @@ def dat_clone(bucket, folder, profile=None):
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
     try:
         session.client("sts").get_caller_identity()
-    except ClientError:
+    except (ClientError, NoCredentialsError, CredentialRetrievalError):
         shutil.rmtree(folder_path, ignore_errors=True)
         die("You are not currently logged into AWS")
 
@@ -697,6 +726,9 @@ def dat_clone(bucket, folder, profile=None):
         shutil.rmtree(folder_path, ignore_errors=True)
         die(f"Failed to clone repository: {e}")
 
+    # .dat/config is published to S3 as of this version; older repos (or ones not
+    # re-pushed since upgrading) won't have one, so fall back to inferring the
+    # hash algorithm from the downloaded master inventory itself.
     remote_config_path = folder_path / ".dat" / "config"
     remote_config = {}
     if remote_config_path.is_file():
@@ -704,14 +736,25 @@ def dat_clone(bucket, folder, profile=None):
             if ":" in line:
                 k, v = line.split(":", 1)
                 remote_config[k.strip()] = v.strip()
-    hash_algo = remote_config.get("hash", "md5")
 
-    config = {"aws": bucket, "hash": hash_algo, "pushed": "True", "symlinks": "ignore"}
+    master_file = folder_path / ".dat" / "master"
+    hash_algo = remote_config.get("hash")
+    if hash_algo is None:
+        hash_algo = read_inventory_hash(master_file)
+    if hash_algo is None and master_file.is_file():
+        hash_algo = _infer_hash_algo(read_inventory(master_file))
+    hash_algo = hash_algo or "md5"
+
+    config = {
+        "aws": bucket,
+        "hash": hash_algo,
+        "pushed": "True",
+        "symlinks": remote_config.get("symlinks", "ignore"),
+    }
     if profile is not None:
         config["profile"] = profile
     write_config(config, remote_config_path)
 
-    master_file = folder_path / ".dat" / "master"
     if master_file.is_file():
         master_file.rename(folder_path / ".dat" / "local")
     else:
@@ -783,10 +826,12 @@ def dat_overwrite_master():
         for f in current:
             repo.upload(f)
         repo.upload(_MASTER)
+        repo.publish_config()
 
         # Delete S3 objects not present locally
         local_keys = {repo.key(f) for f in current}
         local_keys.add(repo.key(".dat/master"))
+        local_keys.add(repo.key(".dat/config"))
         paginator = repo.s3.get_paginator("list_objects_v2")
         kwargs = {"Bucket": repo.bucket}
         if repo.prefix:
@@ -973,6 +1018,7 @@ def dat_push(dry=False, verbose=False):
         else:
             write_inventory(master, _MASTER, repo.config["hash"])
             repo.upload(_MASTER)
+            repo.publish_config()
             write_inventory(local, _LOCAL, repo.config["hash"])
             _MASTER.unlink()
             repo.config["pushed"] = "True"
@@ -993,6 +1039,7 @@ def dat_push(dry=False, verbose=False):
     else:
         write_inventory(master, _MASTER, repo.config["hash"])
         repo.upload(_MASTER)
+        repo.publish_config()
         for f in sorted(active & push):
             repo.upload(f)
         for f in sorted(active & purg):
@@ -1018,7 +1065,17 @@ def dat_rehash(algo="xxh3_64", dry=False):
     current_algo = local_inv_algo or original_config_hash
 
     if algo == current_algo:
-        print(f"Already using {algo}; nothing to do.")
+        if original_config_hash != algo:
+            # Local inventory already uses the target algorithm but the config
+            # was out of sync (e.g. a stale/incorrect clone) -- correct it so
+            # push/pull stop complaining about a mismatch that no longer exists.
+            repo.config["hash"] = algo
+            write_config(repo.config, _CONFIG)
+            print(
+                f"Local files already use {algo}; config said '{original_config_hash}' -- corrected."
+            )
+        else:
+            print(f"Already using {algo}; nothing to do.")
         return
 
     # Check for unpushed/unpurged local changes before anything else.
@@ -1129,6 +1186,7 @@ def dat_rehash(algo="xxh3_64", dry=False):
         try:
             write_inventory(new_master, _MASTER, repo.config["hash"])
             repo.upload(_MASTER)
+            repo.publish_config()
             write_config(repo.config, _CONFIG)
             write_inventory(new_hashes, _LOCAL, repo.config["hash"])
             _MASTER.unlink()
@@ -1173,6 +1231,7 @@ def dat_repair_master():
 
     try:
         repo.upload(remote_master, ".dat/master")
+        repo.publish_config()
     except ClientError as e:
         die(f"Failed to upload master: {e}")
     finally:

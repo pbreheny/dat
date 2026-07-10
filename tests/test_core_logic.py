@@ -6,6 +6,8 @@ import pytest
 
 import dat as dat_module
 from dat import (
+    _infer_hash_algo,
+    _shared_config,
     needs_kill,
     needs_pull,
     needs_purge,
@@ -184,3 +186,41 @@ def test_take_inventory_respects_negation(tmp_path):
 
     assert "raw/keep.csv" in inv
     assert "raw/drop.csv" not in inv
+
+
+# ---------------------------------------------------------------------------
+# Shared (repo-level) config -- the subset published to S3 as .dat/config
+# ---------------------------------------------------------------------------
+
+
+def test_shared_config_excludes_local_only_keys():
+    """aws/profile/pushed are per-machine and must never be published to S3;
+    only hash/symlinks need to match across collaborators."""
+    config = {
+        "aws": "my-bucket",
+        "hash": "xxh3_64",
+        "pushed": "True",
+        "symlinks": "ignore",
+        "profile": "work",
+    }
+
+    assert _shared_config(config) == {"hash": "xxh3_64", "symlinks": "ignore"}
+
+
+def test_shared_config_tolerates_missing_keys():
+    assert _shared_config({"hash": "md5"}) == {"hash": "md5"}
+    assert _shared_config({}) == {}
+
+
+# ---------------------------------------------------------------------------
+# Hash-algorithm inference (fallback when an inventory has no "# hash:" header)
+# ---------------------------------------------------------------------------
+
+
+def test_infer_hash_algo_from_digest_length():
+    assert _infer_hash_algo({"a.txt": "d" * 32}) == "md5"
+    assert _infer_hash_algo({"a.txt": "d" * 16}) == "xxh3_64"
+
+
+def test_infer_hash_algo_empty_inventory_is_none():
+    assert _infer_hash_algo({}) is None

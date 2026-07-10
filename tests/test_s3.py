@@ -479,6 +479,26 @@ class TestDatInit:
         with pytest.raises(SystemExit):
             dat_init("my-bucket", profile=None)
 
+    def test_refuses_home_directory(self, tmp_path, monkeypatch):
+        """A new user running dat init straight in $HOME would turn their whole
+        home directory into one repo -- refuse and explain why."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            dat_init("my-bucket", profile=None)
+
+        assert "home directory" in str(exc.value.code)
+        assert not (tmp_path / ".dat").exists()
+
+    def test_refuses_filesystem_root(self, monkeypatch):
+        monkeypatch.setattr(Path, "cwd", lambda: Path("/"))
+
+        with pytest.raises(SystemExit) as exc:
+            dat_init("my-bucket", profile=None)
+
+        assert "filesystem root" in str(exc.value.code)
+
 
 # ---------------------------------------------------------------------------
 # dat_clone

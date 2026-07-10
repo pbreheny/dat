@@ -787,6 +787,18 @@ def dat_delete():
 
 
 def dat_init(id, profile):
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if cwd == home or cwd == Path(cwd.anchor):
+        where = "your home directory" if cwd == home else "the filesystem root"
+        die(
+            f"Refusing to run 'dat init' in {where}.\n"
+            "dat tracks and syncs every file under the directory where it's initialized, "
+            "so this would turn all of it into one repo -- dat manages a single project "
+            "directory at a time, not your whole machine.\n"
+            "cd into (or create) the specific directory you want to manage and run 'dat init' there."
+        )
+
     if _DAT_DIR.is_dir():
         die("Error: .dat directory already exists")
     _DAT_DIR.mkdir()

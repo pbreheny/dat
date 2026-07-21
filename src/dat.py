@@ -308,16 +308,21 @@ class DatRepo:
                     if local is None:
                         die("Repository has never been pushed; run 'dat push' first")
                     region = get_aws_region(self.config.get("profile"))
-                    if "/" in self.config["aws"]:
-                        b, path_parts = self.config["aws"].split("/", 1)
-                        self.s3.put_object(Bucket=b, Key=f"{path_parts.rstrip('/')}/")
-                    elif region:
-                        self.s3.create_bucket(
-                            Bucket=self.bucket,
-                            CreateBucketConfiguration={"LocationConstraint": region},
-                        )
-                    else:
-                        self.s3.create_bucket(Bucket=self.bucket)
+                    try:
+                        if "/" in self.config["aws"]:
+                            b, path_parts = self.config["aws"].split("/", 1)
+                            self.s3.put_object(Bucket=b, Key=f"{path_parts.rstrip('/')}/")
+                        elif region and region != "us-east-1":
+                            # us-east-1 is S3's default region; passing it explicitly
+                            # as a LocationConstraint is rejected with InvalidLocationConstraint.
+                            self.s3.create_bucket(
+                                Bucket=self.bucket,
+                                CreateBucketConfiguration={"LocationConstraint": region},
+                            )
+                        else:
+                            self.s3.create_bucket(Bucket=self.bucket)
+                    except ClientError as e2:
+                        die(f"Failed to create bucket '{self.bucket}': {e2.response['Error']['Message']}")
                     self.master_hash = None
                     master = local.copy()
                 else:

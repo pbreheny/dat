@@ -133,6 +133,49 @@ class TestGetMaster:
         all_buckets = {b["Name"] for b in s3.list_buckets()["Buckets"]}
         assert fresh in all_buckets
 
+    def test_bucket_missing_us_east_1_creates_without_location_constraint(self, tmp_path, monkeypatch, s3):
+        """us-east-1 must not be passed as an explicit LocationConstraint (AWS rejects it
+        with InvalidLocationConstraint since it's the default region)."""
+        fresh = "brand-new-bucket-us-east-1"
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+        write_config({"aws": fresh, "hash": "md5", "pushed": "False", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
+        local = {"a.txt": "abc123"}
+
+        monkeypatch.setattr(dat_module, "get_aws_region", lambda profile=None: "us-east-1")
+
+        repo = DatRepo()
+        result = repo.get_master(local)
+
+        assert result == local
+        all_buckets = {b["Name"] for b in s3.list_buckets()["Buckets"]}
+        assert fresh in all_buckets
+
+    def test_create_bucket_error_dies_cleanly(self, tmp_path, monkeypatch, s3):
+        """A ClientError from create_bucket (e.g. bad location constraint, name
+        already taken) should die() with a clean message, not an uncaught traceback."""
+        from botocore.exceptions import ClientError
+
+        fresh = "brand-new-bucket-error"
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".dat").mkdir()
+        write_config({"aws": fresh, "hash": "md5", "pushed": "False", "symlinks": "ignore"}, tmp_path / ".dat" / "config")
+
+        monkeypatch.setattr(dat_module, "get_aws_region", lambda profile=None: None)
+
+        repo = DatRepo()
+
+        def _raise(*args, **kwargs):
+            raise ClientError(
+                {"Error": {"Code": "InvalidLocationConstraint", "Message": "The specified location-constraint is not valid"}},
+                "CreateBucket",
+            )
+
+        monkeypatch.setattr(repo.s3, "create_bucket", _raise)
+
+        with pytest.raises(SystemExit):
+            repo.get_master({"a.txt": "abc123"})
+
     def test_404_never_pushed_no_local_dies(self, tmp_path, monkeypatch, s3):
         """404 + pushed==False + local=None → die with helpful message."""
         monkeypatch.chdir(tmp_path)

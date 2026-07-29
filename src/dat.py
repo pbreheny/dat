@@ -940,11 +940,15 @@ def dat_pull(dry=False, verbose=False):
         if resolved:
             print("Resolved: " + str(resolved))
     else:
-        for f in sorted(active):
+        ordered = sorted(active)
+        total = len(ordered)
+        for i, f in enumerate(ordered, 1):
             if f in pull:
+                print(f"[{i}/{total}] {green('Downloading')} {f}")
                 Path(f).parent.mkdir(parents=True, exist_ok=True)
                 repo.download(f)
             elif f in kill:
+                print(f"[{i}/{total}] {red('Removing')} {f}")
                 p = Path(f)
                 if p.exists():
                     p.unlink()
@@ -1057,9 +1061,17 @@ def dat_push(dry=False, verbose=False):
         write_inventory(master, _MASTER, repo.config["hash"])
         repo.upload(_MASTER)
         repo.publish_config()
-        for f in sorted(active & push):
+        to_upload = sorted(active & push)
+        to_delete = sorted(active & purg)
+        total = len(to_upload) + len(to_delete)
+        i = 0
+        for f in to_upload:
+            i += 1
+            print(f"[{i}/{total}] {green('Uploading')} {f}")
             repo.upload(f)
-        for f in sorted(active & purg):
+        for f in to_delete:
+            i += 1
+            print(f"[{i}/{total}] {red('Deleting')} {f}")
             try:
                 repo.delete(f)
             except ClientError:

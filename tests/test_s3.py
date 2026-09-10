@@ -352,6 +352,35 @@ class TestDatPull:
         assert not Path("stale.txt").exists()
         assert "stale.txt" not in read_inventory()
 
+    def test_removes_killed_local_files_prunes_empty_dirs(self, repo_dir, s3):
+        """Removing the last file in a directory should also remove the now-empty directory tree."""
+        h = make_file("data/nested/stale.txt", b"stale local copy")
+        write_inventory({"data/nested/stale.txt": h}, repo_dir / ".dat" / "local", "md5")
+        put_master(s3, {})  # master no longer tracks the file → kill
+
+        dat_pull()
+
+        assert not Path("data/nested/stale.txt").exists()
+        assert not Path("data/nested").exists()
+        assert not Path("data").exists()
+
+    def test_removes_killed_local_files_keeps_nonempty_dirs(self, repo_dir, s3):
+        """A directory should survive pruning if it still has other files in it."""
+        h_stale = make_file("data/stale.txt", b"stale local copy")
+        h_keep = make_file("data/keep.txt", b"still tracked")
+        write_inventory(
+            {"data/stale.txt": h_stale, "data/keep.txt": h_keep},
+            repo_dir / ".dat" / "local",
+            "md5",
+        )
+        put_master(s3, {"data/keep.txt": h_keep})  # stale.txt dropped → kill
+
+        dat_pull()
+
+        assert not Path("data/stale.txt").exists()
+        assert Path("data/keep.txt").exists()
+        assert Path("data").exists()
+
     def test_dry_run_does_not_download(self, repo_dir, s3):
         content = b"would be downloaded"
         h = _md5(content)

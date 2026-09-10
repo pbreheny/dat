@@ -383,6 +383,17 @@ def _is_ignored(f, patterns):
     return ignored
 
 
+def _prune_empty_parents(path):
+    """Remove parent directories of path that have become empty, stopping at cwd."""
+    parent = Path(path).parent
+    while parent != Path("."):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+
+
 def take_inventory(config, root=None):
     root = Path(root) if root is not None else Path(".")
     ignore_patterns = read_ignore_patterns(root / ".dat" / "ignore")
@@ -952,6 +963,7 @@ def dat_pull(dry=False, verbose=False):
                 p = Path(f)
                 if p.exists():
                     p.unlink()
+                    _prune_empty_parents(p)
         write_inventory(local, _LOCAL, repo.config["hash"])
 
 

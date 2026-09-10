@@ -1,6 +1,6 @@
 [project]
 name = "dat"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
     "boto3",
     "xxhash",
